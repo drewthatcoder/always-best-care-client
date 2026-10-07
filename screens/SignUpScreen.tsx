@@ -165,7 +165,7 @@ const SignUpScreen = ({ navigation }: any) => {
           showsVerticalScrollIndicator={false}
         >
           <View style={s.logoWrap}>
-            <BrandLogo width={240} />
+            <BrandLogo width={220} />
           </View>
 
           <Text style={s.title}>Create Account</Text>

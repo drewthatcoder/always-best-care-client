@@ -172,7 +172,7 @@ const HomeScreen = ({ navigation }: any) => {
         contentContainerStyle={s.scroll}
       >
         <View style={s.brandBar}>
-          <BrandLogo width={200} />
+          <BrandLogo width={150} />
         </View>
 
         {/* Header */}

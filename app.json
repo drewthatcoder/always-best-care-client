@@ -22,10 +22,22 @@
       [
         "expo-splash-screen",
         {
-          "image": "./assets/splash-icon.png",
-          "resizeMode": "contain",
           "backgroundColor": "#ffffff",
-          "imageWidth": 240
+          "resizeMode": "contain",
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 240,
+          "ios": {
+            "image": "./assets/splash-icon.png",
+            "resizeMode": "contain",
+            "backgroundColor": "#ffffff",
+            "imageWidth": 240
+          },
+          "android": {
+            "image": "./assets/splash-mark.png",
+            "resizeMode": "contain",
+            "backgroundColor": "#ffffff",
+            "imageWidth": 120
+          }
         }
       ]
     ],

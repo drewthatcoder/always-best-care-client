@@ -11,8 +11,14 @@
  *   assets/adaptive-icon.png   1024 Android adaptive foreground — mark inside
  *                              the 66/108 safe circle, transparent padding
  *   assets/favicon.png         48 web icon — same mark treatment as the iOS icon
- *   assets/splash-icon.png     full lockup, centered, white
+ *   assets/splash-icon.png     full lockup, centered, white (iOS splash)
+ *   assets/splash-mark.png     heart-in-A only, transparent (Android 12 splash)
  *   assets/logo-full.png       full lockup, transparent, for in-app headers
+ *
+ * Android 12 masks the splash icon with a circle. expo-splash-screen draws
+ * `android.imageWidth` (dp) centered on a 288dp canvas, and the visible circle
+ * is the inner 192dp. splash-mark.png is the tight mark; imageWidth 120 keeps
+ * that rectangle inside the circle with padding. iOS keeps the full lockup.
  */
 import { readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -286,6 +292,10 @@ function main() {
   const favicon = placeCentered(faviconMark, FAVICON_SIZE, [255, 255, 255, 255]);
   assertOpaque(favicon, 'favicon');
 
+  // Tight mark for the Android 12 splash. Padding is applied by imageWidth
+  // on the plugin's 288dp canvas, not by extra pixels in this file.
+  const splashMark = renderBox(markOnly, markBox, 512);
+
   const logo = renderBox(sourceSvg, fullBox, IN_APP_LOGO_WIDTH);
   const splashLogo = renderBox(sourceSvg, fullBox, SPLASH_LOGO_WIDTH);
   const margin = Math.round(SPLASH_LOGO_WIDTH * SPLASH_MARGIN);
@@ -301,6 +311,7 @@ function main() {
   writePng(path.join(assetsDir, 'adaptive-icon.png'), adaptive);
   writePng(path.join(assetsDir, 'favicon.png'), favicon, { opaque: true });
   writePng(path.join(assetsDir, 'splash-icon.png'), splash, { opaque: true });
+  writePng(path.join(assetsDir, 'splash-mark.png'), splashMark);
   writePng(path.join(assetsDir, 'logo-full.png'), logo);
 
   const aspect = (logo.width / logo.height).toFixed(6);
@@ -311,6 +322,7 @@ function main() {
     adaptive: { size: ICON_SIZE, mark: `${adaptiveMark.width}x${adaptiveMark.height}` },
     favicon: { size: FAVICON_SIZE, mark: `${faviconMark.width}x${faviconMark.height}` },
     splash: { width: splash.width, height: splash.height },
+    splashMark: { width: splashMark.width, height: splashMark.height },
     logoFull: { width: logo.width, height: logo.height, aspect },
   }, null, 2));
 }

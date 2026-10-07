@@ -646,7 +646,7 @@ const BookingScreen = () => {
   return (
     <SafeAreaView style={s.safe}>
       <View style={s.header}>
-        <BrandLogo width={180} />
+        <BrandLogo width={140} />
       </View>
 
       <ScrollView contentContainerStyle={s.scroll}>
