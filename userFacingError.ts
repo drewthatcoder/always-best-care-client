@@ -27,6 +27,50 @@ export function isDuplicateKey(error: unknown): boolean {
   return code === '23505' || /duplicate key value violates unique constraint/i.test(errorText(error));
 }
 
+export const CARD_LOAD_FAILURE_MESSAGE = "Couldn't load your card";
+
+function errorName(error: unknown): string {
+  if (error && typeof error === 'object' && 'name' in error) return String((error as { name: unknown }).name);
+  return '';
+}
+
+function responseStatus(error: unknown): number | null {
+  if (!error || typeof error !== 'object' || !('context' in error)) return null;
+  const context = (error as { context?: unknown }).context;
+  if (context && typeof context === 'object' && 'status' in context) {
+    const status = (context as { status: unknown }).status;
+    if (typeof status === 'number') return status;
+  }
+  return null;
+}
+
+function looksUndeployed(error: unknown): boolean {
+  const context = error && typeof error === 'object' && 'context' in error
+    ? (error as { context?: unknown }).context
+    : undefined;
+  const text = `${errorText(error)} ${errorText(context)}`.toLowerCase();
+  return /not found|not_found|not deployed|does not exist/.test(text);
+}
+
+/**
+ * The payment function is not deployed: HTTP 404, a relay miss, or a fetch
+ * error that is not a dropped connection. Network failures and HTTP 5xx are not this.
+ */
+export function isUndeployedPaymentFunction(error: unknown): boolean {
+  const status = responseStatus(error);
+  if (status != null && status >= 500) return false;
+  if (isNetworkFailure(error)) return false;
+  const context = error && typeof error === 'object' && 'context' in error
+    ? (error as { context?: unknown }).context
+    : undefined;
+  if (isNetworkFailure(context)) return false;
+
+  const name = errorName(error);
+  if (name === 'FunctionsHttpError') return status === 404 || looksUndeployed(error);
+  if (name === 'FunctionsRelayError' || name === 'FunctionsFetchError') return true;
+  return looksUndeployed(error);
+}
+
 /** Keeps useful server messages and replaces native network exceptions. */
 export function friendlyAlertMessage(error: unknown, fallback: string): string {
   if (isNetworkFailure(error)) return CONNECTION_MESSAGE;

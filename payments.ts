@@ -62,7 +62,8 @@ export function setupIntentIdFromClientSecret(clientSecret: string): string {
 }
 
 export async function getPaymentMethod(): Promise<SavedCard | null> {
-  const data = await invokePayment(paymentFunctionName('get-payment-method'));
+  const { data, error } = await supabase.functions.invoke(paymentFunctionName('get-payment-method'));
+  if (error) throw error;
   return parseSavedCard(data);
 }
 

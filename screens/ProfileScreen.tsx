@@ -17,7 +17,7 @@ import { format } from 'date-fns';
 import { supabase } from '../supabase';
 import { approveBookingStatus } from '../approveBooking';
 import { CardSetupCanceled, getPaymentMethod, saveDefaultCard, type SavedCard } from '../payments';
-import { friendlyAlertMessage } from '../userFacingError';
+import { CARD_LOAD_FAILURE_MESSAGE, friendlyAlertMessage, isUndeployedPaymentFunction } from '../userFacingError';
 
 const COLORS = {
   primary:      '#3D52A0',
@@ -153,7 +153,7 @@ const ProfileScreen = ({ navigation }: any) => {
   const [freqPickerVisible, setFreqPickerVisible]   = useState(false);
   const [savedCard, setSavedCard] = useState<SavedCard | null>(null);
   const [cardLoading, setCardLoading] = useState(true);
-  const [cardError, setCardError] = useState('');
+  const [cardLoadFailed, setCardLoadFailed] = useState(false);
   const [cardBusy, setCardBusy] = useState(false);
   const cardLoadSeq = useRef(0);
   const cardFlowRef = useRef(false);
@@ -165,10 +165,15 @@ const ProfileScreen = ({ navigation }: any) => {
       const card = await getPaymentMethod();
       if (seq !== cardLoadSeq.current) return;
       setSavedCard(card);
-      setCardError('');
-    } catch (err: any) {
+      setCardLoadFailed(false);
+    } catch (err: unknown) {
       if (seq !== cardLoadSeq.current) return;
-      setCardError(err?.message || 'Could not load the card on file.');
+      if (isUndeployedPaymentFunction(err)) {
+        setSavedCard(null);
+        setCardLoadFailed(false);
+      } else {
+        setCardLoadFailed(true);
+      }
     } finally {
       if (seq === cardLoadSeq.current) setCardLoading(false);
     }
@@ -281,7 +286,7 @@ const ProfileScreen = ({ navigation }: any) => {
     try {
       const card = await saveDefaultCard();
       setSavedCard(card);
-      setCardError('');
+      setCardLoadFailed(false);
       setCardLoading(false);
     } catch (err: any) {
       if (!(err instanceof CardSetupCanceled)) {
@@ -650,21 +655,31 @@ const ProfileScreen = ({ navigation }: any) => {
                 <Text style={s.infoValue}>{formatCardBrand(savedCard.brand)} •••• {savedCard.last4}</Text>
                 <Text style={s.emptyText}>Expires {formatCardExpiry(savedCard.expMonth, savedCard.expYear)}</Text>
               </>
-            ) : cardError ? (
-              <Text style={s.emptyText}>{cardError}</Text>
+            ) : cardLoadFailed ? (
+              <Text style={s.emptyText}>{CARD_LOAD_FAILURE_MESSAGE}</Text>
             ) : (
               <Text style={s.emptyText}>No card on file</Text>
             )}
-            {savedCard && cardError ? <Text style={s.emptyText}>{cardError}</Text> : null}
-            <TouchableOpacity
-              style={[s.editBtn, (cardBusy || cardLoading) && s.editBtnDisabled]}
-              onPress={handleSaveCard}
-              disabled={cardBusy || cardLoading}
-            >
-              <Text style={s.editBtnText}>
-                {cardBusy ? 'Opening card form...' : savedCard ? '✏️  Update card' : '✏️  Add card'}
-              </Text>
-            </TouchableOpacity>
+            {savedCard && cardLoadFailed ? <Text style={s.emptyText}>{CARD_LOAD_FAILURE_MESSAGE}</Text> : null}
+            {cardLoadFailed ? (
+              <TouchableOpacity
+                style={[s.editBtn, (cardBusy || cardLoading) && s.editBtnDisabled]}
+                onPress={loadSavedCard}
+                disabled={cardBusy || cardLoading}
+              >
+                <Text style={s.editBtnText}>{cardLoading ? 'Loading...' : 'Retry'}</Text>
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity
+                style={[s.editBtn, (cardBusy || cardLoading) && s.editBtnDisabled]}
+                onPress={handleSaveCard}
+                disabled={cardBusy || cardLoading}
+              >
+                <Text style={s.editBtnText}>
+                  {cardBusy ? 'Opening card form...' : savedCard ? '✏️  Update card' : '✏️  Add card'}
+                </Text>
+              </TouchableOpacity>
+            )}
           </SectionCard>
 
           <SectionCard title="Additional Information" icon="📄">
