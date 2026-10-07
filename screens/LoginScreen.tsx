@@ -103,6 +103,10 @@ const LoginScreen = ({ navigation }: any) => {
             }
           </TouchableOpacity>
 
+          <TouchableOpacity onPress={() => navigation.navigate('SignUp')}>
+            <Text style={s.link}>Need an account? Sign up</Text>
+          </TouchableOpacity>
+
           <Text style={s.footer}>Powered by Care-On-Demand</Text>
         </ScrollView>
       </KeyboardAvoidingView>
@@ -127,6 +131,7 @@ const s = StyleSheet.create({
   eyeIcon:      { fontSize: 18 },
   loginBtn:     { backgroundColor: COLORS.primary, borderRadius: 12, paddingVertical: 16, alignItems: 'center', marginBottom: 16 },
   loginBtnText: { color: COLORS.white, fontWeight: '700', fontSize: 16 },
+  link:         { textAlign: 'center', fontSize: 14, color: COLORS.primary, fontWeight: '600' },
   footer:       { textAlign: 'center', fontSize: 12, color: COLORS.textMuted, marginTop: 24 },
 });
 
