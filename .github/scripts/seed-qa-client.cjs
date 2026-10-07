@@ -3,11 +3,19 @@
  * Credentials come only from QA_CLIENT_EMAIL and QA_CLIENT_PASSWORD.
  * This script never prints those values or the access token.
  */
+const fs = require('fs');
+const path = require('path');
 const { createClient } = require('@supabase/supabase-js');
 
-const url = 'https://uwgfitnpesgdkiwtekcb.supabase.co';
-const anonKey =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InV3Z2ZpdG5wZXNnZGtpd3Rla2NiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQwNDkxMTYsImV4cCI6MjA4OTYyNTExNn0.LDxFhHfaYGmFwsGqOfQoXrmFpKGb3J6ITOnMEh_1H3o';
+function readSupabaseConfig() {
+  const source = fs.readFileSync(path.join(__dirname, '..', '..', 'supabase.js'), 'utf8');
+  const url = source.match(/supabaseUrl = '([^']+)'/);
+  const anonKey = source.match(/supabaseAnonKey = '([^']+)'/);
+  if (!url || !anonKey) {
+    fail('Could not read the app Supabase config.');
+  }
+  return { url: url[1], anonKey: anonKey[1] };
+}
 
 const email = process.env.QA_CLIENT_EMAIL || '';
 const password = process.env.QA_CLIENT_PASSWORD || '';
@@ -22,6 +30,7 @@ async function main() {
     fail('QA client secrets are missing. Refusing to seed.');
   }
 
+  const { url, anonKey } = readSupabaseConfig();
   const supabase = createClient(url, anonKey, {
     auth: { persistSession: false, autoRefreshToken: false },
   });

@@ -22,10 +22,12 @@ jobs:
     name: Android emulator
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    env:
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
     steps:
       - name: Free disk space
         run: |
-          df -h
           sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost /usr/local/lib/android/sdk/ndk /usr/local/lib/android/sdk/system-images || true
           sudo apt-get clean
           df -h
@@ -45,18 +47,41 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
+      # Hosted runners already have the SDK. setup-android@v3 still installs the
+      # removed "tools" package and fails on cmdline-tools 16, so this job
+      # calls sdkmanager directly and does not print the license text.
       - name: Install Android SDK packages
         run: |
           set -euo pipefail
-          yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager --install \
+          SDK_ROOT="$ANDROID_HOME"
+          if [[ ! -e "$SDK_ROOT/cmdline-tools/latest" && -d "$SDK_ROOT/cmdline-tools/16.0" ]]; then
+            sudo ln -sfn "$SDK_ROOT/cmdline-tools/16.0" "$SDK_ROOT/cmdline-tools/latest"
+          fi
+          SM=""
+          for candidate in "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" "$SDK_ROOT/cmdline-tools/16.0/bin/sdkmanager"; do
+            if [[ -x "$candidate" ]]; then
+              SM="$candidate"
+              break
+            fi
+          done
+          if [[ -z "$SM" ]]; then
+            echo "sdkmanager was not found in the hosted Android SDK."
+            exit 1
+          fi
+          sudo mkdir -p "$SDK_ROOT/licenses"
+          printf '%s\n' \
+            '8933bad161af4178b1185d1a37fbf41ea5269c55' \
+            'd56f5187479451eabf01fb78af6dfcb131a6481e' \
+            '24333f8a63b6825ea9c5514f83c2829b004d1fee' \
+            | sudo tee "$SDK_ROOT/licenses/android-sdk-license" >/dev/null
+          yes | "$SM" --sdk_root="$SDK_ROOT" --licenses >/dev/null 2>&1 || true
+          "$SM" --sdk_root="$SDK_ROOT" --install \
             "platform-tools" \
             "platforms;android-36" \
             "build-tools;36.0.0" \
             "ndk;27.1.12297006"
+          echo "$SDK_ROOT/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          echo "$SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
 
       - name: Install dependencies
         run: npm ci
@@ -87,8 +112,11 @@ jobs:
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon --stacktrace -PreactNativeArchitectures=x86_64
           APK="app/build/outputs/apk/debug/app-debug.apk"
-          unzip -l "$APK" | tee /tmp/apk-listing.txt
-          grep -E 'index\.android\.bundle' /tmp/apk-listing.txt
+          if ! unzip -l "$APK" | grep -q 'index\.android\.bundle'; then
+            echo "JS bundle was not embedded in the debug APK."
+            exit 1
+          fi
+          echo "Debug APK contains the embedded JS bundle."
         env:
           CI: "1"
           EXPO_NO_TELEMETRY: "1"
@@ -150,10 +178,22 @@ jobs:
           EOF
           cat maestro-artifacts/NOTES.txt >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Keep screenshots only
+        if: always()
+        run: |
+          set -euo pipefail
+          mkdir -p maestro-artifacts
+          find maestro-artifacts -type f ! -name '*.png' ! -name 'NOTES.txt' ! -name 'screenshot-list.txt' -delete
+          find maestro-artifacts -type d -empty -delete || true
+
       - name: Upload screenshots
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: android-emulator-screenshots
-          path: maestro-artifacts/
+          path: |
+            maestro-artifacts/*.png
+            maestro-artifacts/NOTES.txt
+            maestro-artifacts/screenshot-list.txt
+          retention-days: 3
           if-no-files-found: error

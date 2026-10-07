@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Install the embedded-bundle APK, launch it, and capture Maestro screenshots.
-# Signed-in flows run only when QA_PRESENT=true. Never echo credentials.
+# Signed-in flows run only when QA_PRESENT=true. Never echo credentials or the environment.
+set +x
 set -u
 
 OUT="${GITHUB_WORKSPACE}/maestro-artifacts"
@@ -10,9 +11,9 @@ PKG="com.cityoftreestech.alwaysbestcare"
 STATUS=0
 
 collect_artifacts() {
-  adb logcat -d -t 500 > "$OUT/logcat-tail.txt" 2>/dev/null || true
   if [[ -d "$OUT/maestro-debug" ]]; then
     find "$OUT/maestro-debug" -type f -name '*.png' -exec cp -n {} "$OUT/" \; || true
+    rm -rf "$OUT/maestro-debug"
   fi
   if [[ -d "$HOME/.maestro" ]]; then
     find "$HOME/.maestro" -type f -name '*.png' -exec cp -n {} "$OUT/" \; || true
