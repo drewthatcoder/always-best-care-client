@@ -2,6 +2,7 @@
   "expo": {
     "name": "Always Best Care",
     "slug": "always-best-care",
+    "scheme": "alwaysbestcare",
     "version": "1.0.1",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
