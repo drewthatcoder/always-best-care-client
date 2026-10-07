@@ -71,12 +71,31 @@ export default function App() {
   useEffect(() => {
     // Register for push notifications
     registerForPushNotifications().then(async token => {
-      if (token) {
+      if (!token) return;
+      try {
         const { data: { user } } = await supabase.auth.getUser();
-        if (user) {
-          await supabase.from('profiles').upsert({ user_id: user.id, push_token: token });
+        if (!user) return;
+
+        const { data: updated, error: updateError } = await supabase
+          .from('profiles')
+          .update({ push_token: token })
+          .eq('user_id', user.id)
+          .select('id');
+        if (updateError) {
+          console.warn('Could not update push token', updateError);
+          return;
         }
+        if (updated && updated.length > 0) return;
+
+        const { error: insertError } = await supabase
+          .from('profiles')
+          .insert({ user_id: user.id, push_token: token });
+        if (insertError) console.warn('Could not save push token', insertError);
+      } catch (err) {
+        console.warn('Could not save push token', err);
       }
+    }).catch(err => {
+      console.warn('Could not register for push notifications', err);
     });
 
     // Listen for notifications
