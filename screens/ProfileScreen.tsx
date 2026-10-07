@@ -107,6 +107,7 @@ const ProfileScreen = ({ navigation }: any) => {
   const [loading, setLoading]       = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [updating, setUpdating]     = useState<string | null>(null);
+  const [requestingCallId, setRequestingCallId] = useState<string | null>(null);
   const [userEmail, setUserEmail]   = useState('');
   const [memberSince, setMemberSince] = useState('');
   const [profile, setProfile] = useState<any>(null);
@@ -192,11 +193,44 @@ const ProfileScreen = ({ navigation }: any) => {
     fetchData();
   };
 
+  const showRequestCallError = (message: string) => {
+    Alert.alert(
+      'Could not notify your provider',
+      `${message}\n\nCall the agency at (916) 884-1983.`,
+      [
+        {
+          text: 'Call agency',
+          onPress: () => Linking.openURL('tel:9168841983').catch(() => Alert.alert('Agency phone', '(916) 884-1983')),
+        },
+        { text: 'OK', style: 'cancel' },
+      ]
+    );
+  };
+
   const handleDecline = async (shift: PendingShift) => {
-    // TODO(client_request_call): Call public.client_request_call(p_booking_id uuid)
-    // with shift.id once Software Lead confirms the signature. Do not wire this RPC in until then.
-    Alert.alert('Request received', 'The agency will follow up.');
-    fetchData();
+    if (requestingCallId) return;
+    setRequestingCallId(shift.id);
+    try {
+      const { data, error } = await supabase.rpc('client_request_call', { p_booking_id: shift.id });
+      if (error) {
+        showRequestCallError(error.message || 'Something went wrong.');
+        return;
+      }
+      const created = Number(data);
+      if (created > 0) {
+        Alert.alert("Provider notified. They'll call you soon.");
+      } else if (created === 0) {
+        Alert.alert("We already let your provider know. They'll call you soon.");
+      } else {
+        showRequestCallError('Something went wrong.');
+        return;
+      }
+      fetchData();
+    } catch (err: any) {
+      showRequestCallError(err?.message || 'Something went wrong.');
+    } finally {
+      setRequestingCallId(null);
+    }
   };
 
   const openEdit = (section: string) => {
@@ -308,8 +342,8 @@ const ProfileScreen = ({ navigation }: any) => {
               <TouchableOpacity style={s.approveBtn} onPress={() => handleApprove(shift)} disabled={updating === shift.id}>
                 <Text style={s.approveBtnText}>{updating === shift.id ? 'Approving...' : '✅ Approve'}</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={s.declineBtn} onPress={() => handleDecline(shift)} disabled={updating === shift.id}>
-                <Text style={s.declineBtnText}>📞 Decline, Please Call me</Text>
+              <TouchableOpacity style={s.declineBtn} onPress={() => handleDecline(shift)} disabled={updating === shift.id || requestingCallId === shift.id}>
+                <Text style={s.declineBtnText}>{requestingCallId === shift.id ? 'Notifying...' : '📞 Decline, Please Call me'}</Text>
               </TouchableOpacity>
             </View>
           </View>

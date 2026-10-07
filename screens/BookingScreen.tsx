@@ -177,6 +177,7 @@ const BookingScreen = () => {
   const [bookings, setBookings]               = useState<Booking[]>([]);
   const [loading, setLoading]                 = useState(true);
   const [updating, setUpdating]               = useState<string | null>(null);
+  const [requestingCallId, setRequestingCallId] = useState<string | null>(null);
   const [pickerVisible, setPickerVisible]     = useState(false);
   const [pickerMonth, setPickerMonth]         = useState(new Date());
   const [providerNames, setProviderNames]     = useState<Record<string, string>>({});
@@ -369,13 +370,43 @@ const BookingScreen = () => {
     fetchBookings();
   };
 
+  const showRequestCallError = (message: string) => {
+    Alert.alert(
+      'Could not notify your provider',
+      `${message}\n\nCall the agency at ${AGENCY_PHONE_DISPLAY}.`,
+      [
+        { text: 'Call agency', onPress: callAgency },
+        { text: 'OK', style: 'cancel' },
+      ]
+    );
+  };
+
   const handleDecline = async (shift: Booking) => {
-    setDecliningId(shift.id);
-    setAltSlots(getAltTimeSlots(shift));
-    setAltTime('');
-    // TODO(client_request_call): Call public.client_request_call(p_booking_id uuid)
-    // with shift.id once Software Lead confirms the signature. Do not wire this RPC in until then.
-    Alert.alert('Request received', 'The agency will follow up.');
+    if (requestingCallId) return;
+    setRequestingCallId(shift.id);
+    try {
+      const { data, error } = await supabase.rpc('client_request_call', { p_booking_id: shift.id });
+      if (error) {
+        showRequestCallError(error.message || 'Something went wrong.');
+        return;
+      }
+      const created = Number(data);
+      if (created > 0) {
+        Alert.alert("Provider notified. They'll call you soon.");
+      } else if (created === 0) {
+        Alert.alert("We already let your provider know. They'll call you soon.");
+      } else {
+        showRequestCallError('Something went wrong.');
+        return;
+      }
+      setDecliningId(shift.id);
+      setAltSlots(getAltTimeSlots(shift));
+      setAltTime('');
+    } catch (err: any) {
+      showRequestCallError(err?.message || 'Something went wrong.');
+    } finally {
+      setRequestingCallId(null);
+    }
   };
 
   const handleSendAltTime = async (shift: Booking) => {
@@ -523,8 +554,8 @@ const BookingScreen = () => {
                       <TouchableOpacity style={[s.actionBtn, s.approveBtn]} onPress={() => handleApprove(shift)} disabled={updating === shift.id}>
                         <Text style={s.actionBtnText}>{updating === shift.id ? 'Approving...' : '✅ Approve'}</Text>
                       </TouchableOpacity>
-                      <TouchableOpacity style={[s.actionBtn, s.declineBtn]} onPress={() => handleDecline(shift)} disabled={updating === shift.id}>
-                        <Text style={s.actionBtnText}>📞 Decline, Call Me</Text>
+                      <TouchableOpacity style={[s.actionBtn, s.declineBtn]} onPress={() => handleDecline(shift)} disabled={updating === shift.id || requestingCallId === shift.id}>
+                        <Text style={s.actionBtnText}>{requestingCallId === shift.id ? 'Notifying...' : '📞 Decline, Call Me'}</Text>
                       </TouchableOpacity>
                     </View>
                   ) : (
