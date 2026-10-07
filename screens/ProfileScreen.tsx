@@ -15,6 +15,7 @@ import {
 } from 'react-native';
 import { format } from 'date-fns';
 import { supabase } from '../supabase';
+import { approveBookingStatus } from '../approveBooking';
 
 const COLORS = {
   primary:      '#3D52A0',
@@ -232,11 +233,17 @@ const ProfileScreen = ({ navigation }: any) => {
   };
 
   const handleApprove = async (shift: PendingShift) => {
+    if (updating) return;
     setUpdating(shift.id);
-    const { error } = await supabase.from('bookings').update({ status: 'approved' } as any).eq('id', shift.id);
-    if (error) Alert.alert('Error', 'Could not approve shift');
-    setUpdating(null);
-    fetchData();
+    try {
+      await approveBookingStatus(shift.id);
+      Alert.alert('Booking approved');
+    } catch (err: any) {
+      Alert.alert('Error', err?.message || 'Could not approve shift');
+    } finally {
+      setUpdating(null);
+      fetchData();
+    }
   };
 
   const showRequestCallError = (message: string) => {

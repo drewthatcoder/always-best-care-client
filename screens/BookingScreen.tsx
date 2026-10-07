@@ -27,6 +27,7 @@ import {
   subWeeks,
 } from 'date-fns';
 import { supabase } from '../supabase';
+import { approveBookingStatus } from '../approveBooking';
 
 const COLORS = {
   primary:      'hsl(231, 41%, 48%)',
@@ -364,60 +365,17 @@ const BookingScreen = () => {
   };
 
   const handleApprove = async (shift: Booking) => {
+    if (updating) return;
     setUpdating(shift.id);
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
-
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('stripe_customer_id')
-        .eq('user_id', user.id)
-        .single();
-
-      console.log('Profile:', profile);
-      console.log('Stripe customer ID:', profile?.stripe_customer_id);
-
-      if (profile?.stripe_customer_id) {
-        const services = shift.service.split(',').length;
-        const amount = services <= 2 ? services * 5500 : 2 * 5500 + (services - 2) * 4500;
-        console.log('Calling charge-client with:', { customerId: profile.stripe_customer_id, amount });
-        const chargeRes = await fetch(
-          'https://uwgfitnpesgdkiwtekcb.supabase.co/functions/v1/charge-client',
-          {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InV3Z2ZpdG5wZXNnZGtpd3Rla2NiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQwNDkxMTYsImV4cCI6MjA4OTYyNTExNn0.LDxFhHfaYGmFwsGqOfQoXrmFpKGb3J6ITOnMEh_1H3o',
-            },
-            body: JSON.stringify({
-              customerId: profile.stripe_customer_id,
-              amount: amount,
-              description: `Always Best Care - ${shift.service} on ${shift.scheduled_date}`,
-              bookingId: shift.id,
-              providerUserId: shift.provider_user_id || undefined,
-            }),
-          }
-        );
-        console.log('Charge response status:', chargeRes.status);
-        const chargeData = await chargeRes.json();
-        console.log('Charge response data:', chargeData);
-        if (chargeData.error) {
-          Alert.alert('Payment failed', chargeData.error);
-          setUpdating(null);
-          return;
-        }
-      }
-
-      const { error } = await supabase
-        .from('bookings').update({ status: 'approved' } as any).eq('id', shift.id);
-
-      if (error) Alert.alert('Error', 'Could not approve shift');
+      await approveBookingStatus(shift.id);
+      Alert.alert('Booking approved');
     } catch (err: any) {
-      Alert.alert('Error', err.message || 'Something went wrong');
+      Alert.alert('Error', err?.message || 'Could not approve shift');
+    } finally {
+      setUpdating(null);
+      fetchBookings();
     }
-    setUpdating(null);
-    fetchBookings();
   };
 
   const showRequestCallError = (message: string) => {
