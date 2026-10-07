@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -15,7 +15,9 @@ import {
 } from 'react-native';
 import { format } from 'date-fns';
 import { supabase } from '../supabase';
-import { friendlyAlertMessage } from '../userFacingError';
+import { approveBookingStatus } from '../approveBooking';
+import { CardSetupCanceled, getPaymentMethod, saveDefaultCard, type SavedCard } from '../payments';
+import { CARD_LOAD_FAILURE_MESSAGE, friendlyAlertMessage, isUndeployedPaymentFunction } from '../userFacingError';
 
 const COLORS = {
   primary:      '#3D52A0',
@@ -72,6 +74,21 @@ const InfoRow = ({ icon, label, value }: { icon: string; label: string; value: s
     </View>
   </View>
 );
+
+const formatCardBrand = (brand: string) => {
+  const known: Record<string, string> = {
+    visa: 'Visa',
+    mastercard: 'Mastercard',
+    amex: 'American Express',
+    discover: 'Discover',
+    diners: 'Diners Club',
+    jcb: 'JCB',
+    unionpay: 'UnionPay',
+  };
+  return known[brand.toLowerCase()] || brand;
+};
+
+const formatCardExpiry = (month: number, year: number) => `${String(month).padStart(2, '0')}/${year}`;
 
 const EditBtn = ({ label, onPress }: { label: string; onPress: () => void }) => (
   <TouchableOpacity style={s.editBtn} onPress={onPress}>
@@ -134,6 +151,33 @@ const ProfileScreen = ({ navigation }: any) => {
   const [editAdditionalInfo, setEditAdditionalInfo] = useState('');
   const [statePickerVisible, setStatePickerVisible] = useState(false);
   const [freqPickerVisible, setFreqPickerVisible]   = useState(false);
+  const [savedCard, setSavedCard] = useState<SavedCard | null>(null);
+  const [cardLoading, setCardLoading] = useState(true);
+  const [cardLoadFailed, setCardLoadFailed] = useState(false);
+  const [cardBusy, setCardBusy] = useState(false);
+  const cardLoadSeq = useRef(0);
+  const cardFlowRef = useRef(false);
+
+  const loadSavedCard = useCallback(async () => {
+    const seq = ++cardLoadSeq.current;
+    setCardLoading(true);
+    try {
+      const card = await getPaymentMethod();
+      if (seq !== cardLoadSeq.current) return;
+      setSavedCard(card);
+      setCardLoadFailed(false);
+    } catch (err: unknown) {
+      if (seq !== cardLoadSeq.current) return;
+      if (isUndeployedPaymentFunction(err)) {
+        setSavedCard(null);
+        setCardLoadFailed(false);
+      } else {
+        setCardLoadFailed(true);
+      }
+    } finally {
+      if (seq === cardLoadSeq.current) setCardLoading(false);
+    }
+  }, []);
 
   const fetchData = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser();
@@ -149,7 +193,8 @@ const ProfileScreen = ({ navigation }: any) => {
     setPendingShifts(pending);
     setLoading(false);
     setRefreshing(false);
-  }, []);
+    await loadSavedCard();
+  }, [loadSavedCard]);
 
   useEffect(() => {
     fetchData();
@@ -232,12 +277,39 @@ const ProfileScreen = ({ navigation }: any) => {
     return true;
   };
 
+  const handleSaveCard = async () => {
+    if (cardFlowRef.current || cardBusy) return;
+    cardFlowRef.current = true;
+    cardLoadSeq.current += 1;
+    setCardLoading(false);
+    setCardBusy(true);
+    try {
+      const card = await saveDefaultCard();
+      setSavedCard(card);
+      setCardLoadFailed(false);
+      setCardLoading(false);
+    } catch (err: any) {
+      if (!(err instanceof CardSetupCanceled)) {
+        Alert.alert('Could not save card', err?.message || 'Something went wrong.');
+      }
+    } finally {
+      cardFlowRef.current = false;
+      setCardBusy(false);
+    }
+  };
+
   const handleApprove = async (shift: PendingShift) => {
+    if (updating) return;
     setUpdating(shift.id);
-    const { error } = await supabase.from('bookings').update({ status: 'approved' } as any).eq('id', shift.id);
-    if (error) Alert.alert('Error', 'Could not approve shift');
-    setUpdating(null);
-    fetchData();
+    try {
+      await approveBookingStatus(shift.id);
+      Alert.alert('Booking approved');
+    } catch (err: any) {
+      Alert.alert('Error', err?.message || 'Could not approve shift');
+    } finally {
+      setUpdating(null);
+      fetchData();
+    }
   };
 
   const showRequestCallError = (message: string) => {
@@ -576,8 +648,38 @@ const ProfileScreen = ({ navigation }: any) => {
           </SectionCard>
 
           <SectionCard title="Payment Information" icon="💳">
-            <Text style={s.emptyText}>Card on file</Text>
-            <EditBtn label="Edit Payment" onPress={() => Alert.alert('Payment', 'Payment editing coming soon.')} />
+            {cardLoading && !savedCard ? (
+              <ActivityIndicator color={COLORS.primary} style={{ marginVertical: 8 }} />
+            ) : savedCard ? (
+              <>
+                <Text style={s.infoValue}>{formatCardBrand(savedCard.brand)} •••• {savedCard.last4}</Text>
+                <Text style={s.emptyText}>Expires {formatCardExpiry(savedCard.expMonth, savedCard.expYear)}</Text>
+              </>
+            ) : cardLoadFailed ? (
+              <Text style={s.emptyText}>{CARD_LOAD_FAILURE_MESSAGE}</Text>
+            ) : (
+              <Text style={s.emptyText}>No card on file</Text>
+            )}
+            {savedCard && cardLoadFailed ? <Text style={s.emptyText}>{CARD_LOAD_FAILURE_MESSAGE}</Text> : null}
+            {cardLoadFailed ? (
+              <TouchableOpacity
+                style={[s.editBtn, (cardBusy || cardLoading) && s.editBtnDisabled]}
+                onPress={loadSavedCard}
+                disabled={cardBusy || cardLoading}
+              >
+                <Text style={s.editBtnText}>{cardLoading ? 'Loading...' : 'Retry'}</Text>
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity
+                style={[s.editBtn, (cardBusy || cardLoading) && s.editBtnDisabled]}
+                onPress={handleSaveCard}
+                disabled={cardBusy || cardLoading}
+              >
+                <Text style={s.editBtnText}>
+                  {cardBusy ? 'Opening card form...' : savedCard ? '✏️  Update card' : '✏️  Add card'}
+                </Text>
+              </TouchableOpacity>
+            )}
           </SectionCard>
 
           <SectionCard title="Additional Information" icon="📄">
@@ -799,6 +901,7 @@ const s = StyleSheet.create({
   infoLabel:          { fontSize: 12, color: COLORS.textMuted },
   infoValue:          { fontSize: 15, fontWeight: '600', color: COLORS.text, marginTop: 2 },
   editBtn:            { borderWidth: 1, borderColor: COLORS.border, borderRadius: 12, paddingVertical: 12, alignItems: 'center', marginTop: 8, marginBottom: 4 },
+  editBtnDisabled:    { opacity: 0.6 },
   editBtnText:        { fontSize: 14, color: COLORS.textMuted, fontWeight: '500' },
   sectionCard:        { backgroundColor: COLORS.white, borderRadius: 16, padding: 16, marginBottom: 16, borderWidth: 1, borderColor: COLORS.border },
   sectionHeader:      { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
