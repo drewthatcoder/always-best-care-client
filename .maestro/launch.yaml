@@ -1,0 +1,24 @@
+appId: com.cityoftreestech.alwaysbestcare
+---
+# Unsigned launch. Runs even when QA_CLIENT_EMAIL / QA_CLIENT_PASSWORD are unset.
+- launchApp:
+    clearState: true
+- extendedWaitUntil:
+    visible: "Client Login"
+    timeout: 120000
+- takeScreenshot: 01-launch-login
+
+# (h) Several opens. The login screen must still come back.
+- stopApp
+- launchApp
+- extendedWaitUntil:
+    visible: "Client Login"
+    timeout: 120000
+- takeScreenshot: 02-reopen-login
+
+- stopApp
+- launchApp
+- extendedWaitUntil:
+    visible: "Client Login"
+    timeout: 120000
+- takeScreenshot: 03-reopen-again-login

@@ -1,0 +1,79 @@
+appId: com.cityoftreestech.alwaysbestcare
+---
+# Signed-in flows. The workflow only runs this when both QA secrets are set.
+# Maestro substitutes the env vars at runtime. Do not put credentials in this file.
+- launchApp:
+    clearState: true
+- extendedWaitUntil:
+    visible: "Client Login"
+    timeout: 120000
+- tapOn: "Enter your email"
+- inputText: ${QA_CLIENT_EMAIL}
+- tapOn: "Enter your password"
+- inputText: ${QA_CLIENT_PASSWORD}
+- hideKeyboard
+- tapOn: "Log In"
+
+# (b) Unread notification seeded for this client, shown once the session opens.
+- extendedWaitUntil:
+    visible: "QA notification"
+    timeout: 120000
+- assertVisible: "Please review this care update"
+- takeScreenshot: 11-unread-notification
+- tapOn: "OK"
+
+- extendedWaitUntil:
+    visible: "Welcome to Always Best Care"
+    timeout: 60000
+- takeScreenshot: 10-home
+
+# (a) Transportation pop-up names the agency number.
+- scrollUntilVisible:
+    element: "Transportation"
+    direction: DOWN
+    timeout: 40000
+- tapOn: "Transportation"
+- extendedWaitUntil:
+    visible: ".*884-1983.*"
+    timeout: 20000
+- assertVisible: ".*\\(916\\) 884-1983.*"
+- takeScreenshot: 12-transportation-popup
+- tapOn: "OK"
+
+# Light regression: booking screen, then the provider call button.
+- extendedWaitUntil:
+    visible: "Book a Home Care Appointment|Booking"
+    timeout: 60000
+- tapOn: "Booking"
+- extendedWaitUntil:
+    visible: "Book a Home Care Appointment"
+    timeout: 60000
+- takeScreenshot: 14-booking
+- scrollUntilVisible:
+    element: "Call \\(916\\) 884-1983"
+    direction: DOWN
+    timeout: 60000
+# (d) Agency tap-to-call after a provider is connected.
+- assertVisible: ".*Call \\(916\\) 884-1983.*"
+- takeScreenshot: 13-provider-call-button
+
+# Light regression: profile screen.
+- tapOn: "Profile"
+- extendedWaitUntil:
+    visible: "Client Profile"
+    timeout: 60000
+- takeScreenshot: 15-profile
+
+# (h) Further opens while a session exists. The UI must still render.
+- stopApp
+- launchApp
+- extendedWaitUntil:
+    visible: "Always Best Care"
+    timeout: 120000
+- takeScreenshot: 16-reopen-signed-in
+- stopApp
+- launchApp
+- extendedWaitUntil:
+    visible: "Always Best Care"
+    timeout: 120000
+- takeScreenshot: 17-reopen-signed-in-again

@@ -1,0 +1,159 @@
+name: Android emulator QA
+
+# Device UI evidence for the client app. Hosted Ubuntu runners provide KVM.
+# This does not change app code. App.js returns before saving a push token
+# when Device.isDevice is false, so an emulator run does not update profiles.push_token.
+
+on:
+  push:
+    branches:
+      - ci/android-emulator-qa
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-emulator-qa-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  emulator:
+    name: Android emulator
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Free disk space
+        run: |
+          df -h
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost /usr/local/lib/android/sdk/ndk /usr/local/lib/android/sdk/system-images || true
+          sudo apt-get clean
+          df -h
+
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager --install \
+            "platform-tools" \
+            "platforms;android-36" \
+            "build-tools;36.0.0" \
+            "ndk;27.1.12297006"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Maestro
+        run: |
+          set -euo pipefail
+          curl -fsSL "https://get.maestro.mobile.dev" | bash
+          echo "$HOME/.maestro/bin" >> "$GITHUB_PATH"
+          "$HOME/.maestro/bin/maestro" --version
+
+      - name: Prebuild Android project
+        run: npx expo prebuild --platform android --no-install --non-interactive
+        env:
+          CI: "1"
+          EXPO_NO_TELEMETRY: "1"
+
+      - name: Embed the JS bundle in the debug APK
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/embed-debug-bundle.py
+          sed -i 's/^reactNativeArchitectures=.*/reactNativeArchitectures=x86_64/' android/gradle.properties
+
+      - name: Build debug APK
+        run: |
+          set -euo pipefail
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon --stacktrace -PreactNativeArchitectures=x86_64
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+          unzip -l "$APK" | tee /tmp/apk-listing.txt
+          grep -E 'index\.android\.bundle' /tmp/apk-listing.txt
+        env:
+          CI: "1"
+          EXPO_NO_TELEMETRY: "1"
+          GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx3g -XX:MaxMetaspaceSize=512m -XX:+HeapDumpOnOutOfMemoryError -Dfile.encoding=UTF-8 -Dorg.gradle.workers.max=2"
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.users.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls -l /dev/kvm
+
+      - name: Detect QA client secrets
+        id: qa
+        env:
+          QA_CLIENT_EMAIL: ${{ secrets.QA_CLIENT_EMAIL }}
+          QA_CLIENT_PASSWORD: ${{ secrets.QA_CLIENT_PASSWORD }}
+        run: |
+          set +x
+          if [ -n "$QA_CLIENT_EMAIL" ]; then
+            echo "::add-mask::$QA_CLIENT_EMAIL"
+          fi
+          if [ -n "$QA_CLIENT_PASSWORD" ]; then
+            echo "::add-mask::$QA_CLIENT_PASSWORD"
+          fi
+          if [ -n "$QA_CLIENT_EMAIL" ] && [ -n "$QA_CLIENT_PASSWORD" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+            echo "Signed-in QA flows will run."
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "QA client secrets are not set. Signed-in flows will be skipped."
+          fi
+
+      - name: Boot emulator, install, and drive the app
+        uses: reactivecircus/android-emulator-runner@v2
+        env:
+          QA_PRESENT: ${{ steps.qa.outputs.present }}
+          QA_CLIENT_EMAIL: ${{ secrets.QA_CLIENT_EMAIL }}
+          QA_CLIENT_PASSWORD: ${{ secrets.QA_CLIENT_PASSWORD }}
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          ram-size: 2048M
+          disable-animations: true
+          emulator-boot-timeout: 900
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot -camera-back none
+          script: bash .github/scripts/drive-android.sh
+
+      - name: Record emulator push-token limitation
+        if: always()
+        run: |
+          mkdir -p maestro-artifacts
+          cat > maestro-artifacts/NOTES.txt <<'EOF'
+          App.js registerForPushNotifications returns immediately when Device.isDevice is false.
+          This emulator is not a physical device, so profiles.push_token is not updated on these launches.
+          Check (h) only shows that the UI still comes back after several opens. The profile-row database check is separate.
+          Signed-in flows (login, transportation pop-up, unread notification, provider call button, booking, profile) run only when both QA_CLIENT_EMAIL and QA_CLIENT_PASSWORD are set.
+          EOF
+          cat maestro-artifacts/NOTES.txt >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-emulator-screenshots
+          path: maestro-artifacts/
+          if-no-files-found: error
