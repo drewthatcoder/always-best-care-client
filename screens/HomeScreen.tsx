@@ -115,12 +115,29 @@ const HomeScreen = ({ navigation }: any) => {
   }, [fetchData]));
 
   useEffect(() => {
-    const channel = supabase
-      .channel('home-screen')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'bookings' }, fetchData)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'notifications' }, fetchData)
-      .subscribe();
-    return () => { supabase.removeChannel(channel); };
+    let active = true;
+    let channel: ReturnType<typeof supabase.channel> | null = null;
+
+    supabase.auth.getSession().then(({ data }) => {
+      const userId = data.session?.user?.id;
+      if (!active || !userId) return;
+      // notifications is the only table in supabase_realtime. Listening for
+      // bookings on this channel makes the whole subscription fail, so the
+      // badge never hears read or insert events.
+      channel = supabase
+        .channel(`home-notifications-${userId}`)
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'notifications', filter: `user_id=eq.${userId}` },
+          () => { fetchData(); }
+        )
+        .subscribe();
+    });
+
+    return () => {
+      active = false;
+      if (channel) supabase.removeChannel(channel);
+    };
   }, [fetchData]);
 
   const onRefresh = () => { setRefreshing(true); fetchData(); };

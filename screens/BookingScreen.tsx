@@ -93,18 +93,24 @@ const resolveClientZip = async (userId: string): Promise<string> => {
     .order('updated_at', { ascending: false, nullsFirst: false })
     .order('created_at', { ascending: false, nullsFirst: false });
 
-  if (error) console.warn('Profile zip lookup failed', error);
+  if (error) {
+    throw new Error(error.message || 'Could not look up the zip code on file.');
+  }
 
   for (const row of profiles || []) {
     const zip = extractZip(row.zip_code);
     if (zip) return zip;
   }
 
-  const { data: prior } = await supabase
+  const { data: prior, error: priorError } = await supabase
     .from('bookings')
     .select('client_zip_code, client_address')
     .eq('client_user_id', userId)
     .order('scheduled_date', { ascending: false });
+
+  if (priorError) {
+    throw new Error(priorError.message || 'Could not look up the zip code on file.');
+  }
 
   for (const row of prior || []) {
     const zip = extractZip(row.client_zip_code) || extractZip(row.client_address);

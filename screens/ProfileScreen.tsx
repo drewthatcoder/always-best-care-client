@@ -111,6 +111,7 @@ const ProfileScreen = ({ navigation }: any) => {
   const [userEmail, setUserEmail]   = useState('');
   const [memberSince, setMemberSince] = useState('');
   const [profile, setProfile] = useState<any>(null);
+  const [accountMeta, setAccountMeta] = useState<any>(null);
   const [bookings, setBookings] = useState<any[]>([]);
   const [pendingShifts, setPendingShifts] = useState<PendingShift[]>([]);
   const [editModal, setEditModal] = useState<string | null>(null);
@@ -137,6 +138,7 @@ const ProfileScreen = ({ navigation }: any) => {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
     setUserEmail(user.email || '');
+    setAccountMeta(user.user_metadata || null);
     setMemberSince(format(new Date(user.created_at), 'MMMM yyyy'));
     const { data: prof } = await supabase.from('profiles').select('*').eq('user_id', user.id).single();
     setProfile(prof);
@@ -173,15 +175,20 @@ const ProfileScreen = ({ navigation }: any) => {
     const match = ALL_SERVICES.find(svc => svc.id === trimmed || svc.label === trimmed);
     return match ? match.label : trimmed;
   };
-  const clientPhone   = profileBooking?.client_phone || '';
+  const metaPhone = typeof accountMeta?.phone === 'string' ? accountMeta.phone : '';
+  const metaAddress = typeof accountMeta?.address === 'string' ? accountMeta.address : '';
+  const metaCity = typeof accountMeta?.city === 'string' ? accountMeta.city : '';
+  const metaState = typeof accountMeta?.state === 'string' ? accountMeta.state : '';
+  const metaZip = typeof accountMeta?.zip_code === 'string' ? accountMeta.zip_code : '';
+  const clientPhone   = profileBooking?.client_phone || metaPhone;
   const clientDob     = profileBooking?.client_date_of_birth || '';
   const clientHeight  = profileBooking?.client_height || '';
   const clientWeight  = profileBooking?.client_weight || '';
-  const clientAddress = profileBooking?.client_address || '';
+  const clientAddress = profileBooking?.client_address || metaAddress;
   const clientAddress2= profileBooking?.client_address_line2 || '';
-  const clientCity    = profileBooking?.client_city || '';
-  const clientState   = profileBooking?.client_state || '';
-  const clientZip     = profileBooking?.client_zip_code || profile?.zip_code || '';
+  const clientCity    = profileBooking?.client_city || metaCity;
+  const clientState   = profileBooking?.client_state || metaState;
+  const clientZip     = profileBooking?.client_zip_code || profile?.zip_code || metaZip;
   const careFor       = profileBooking?.client_responsible_party || 'myself';
   const respEmail     = profileBooking?.client_responsible_party_email || userEmail;
   const respName      = profileBooking?.client_responsible_party_name || '';
@@ -294,25 +301,96 @@ const ProfileScreen = ({ navigation }: any) => {
     const ok = await saveBookingField({ client_phone: editPhone, client_date_of_birth: editDob, client_height: editHeight, client_weight: editWeight });
     if (ok) setEditModal(null);
   };
+  const normalizeZip = (value?: string | null) => {
+    const match = (value || '').match(/\b(\d{5})(?:-\d{4})?\b/);
+    return match ? match[1] : (value || '').trim();
+  };
+
   const saveAddress = async () => {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) {
       Alert.alert('Not signed in', 'Log in again before saving.');
       return;
     }
-    const { error: profileError } = await supabase.from('profiles').update({ zip_code: editZip } as any).eq('user_id', user.id);
-    if (profileError) {
-      Alert.alert('Could not save zip code', profileError.message || 'The zip code was not saved.');
+    const nextZip = normalizeZip(editZip);
+    if (!/^\d{5}$/.test(nextZip)) {
+      Alert.alert('Zip code required', 'Enter the 5-digit zip code for the address where care will be provided.');
       return;
     }
-    if (openBookings.length === 0) {
-      Alert.alert('Zip code saved', 'Your profile zip code was updated. Street, city, and state are stored on upcoming and pending bookings, and you do not have any of those. Cancelled, approved, and past bookings were not changed.');
+
+    const profileZip = normalizeZip(profile?.zip_code);
+    const profileZipChanged = nextZip !== profileZip;
+    const bookingsToUpdate = openBookings.filter((booking: any) => {
+      const addressChanged =
+        (booking.client_address || '') !== editAddress ||
+        (booking.client_address_line2 || '') !== editAddress2 ||
+        (booking.client_city || '') !== editCity ||
+        (booking.client_state || '') !== editState;
+      const zipChanged = normalizeZip(booking.client_zip_code) !== nextZip;
+      return addressChanged || zipChanged;
+    });
+    const zipChanges = bookingsToUpdate.filter((booking: any) => normalizeZip(booking.client_zip_code) !== nextZip);
+
+    if (!profileZipChanged && bookingsToUpdate.length === 0) {
       setEditModal(null);
-      fetchData();
       return;
     }
-    const ok = await saveBookingField({ client_address: editAddress, client_address_line2: editAddress2, client_city: editCity, client_state: editState, client_zip_code: editZip });
-    if (ok) setEditModal(null);
+
+    const applyAddress = async () => {
+      if (profileZipChanged) {
+        const { error: profileError } = await supabase.from('profiles').update({ zip_code: nextZip } as any).eq('user_id', user.id);
+        if (profileError) {
+          Alert.alert('Could not save zip code', profileError.message || 'The zip code was not saved.');
+          return;
+        }
+      }
+
+      for (const booking of bookingsToUpdate) {
+        const fields: Record<string, string> = {
+          client_address: editAddress,
+          client_address_line2: editAddress2,
+          client_city: editCity,
+          client_state: editState,
+        };
+        if (normalizeZip(booking.client_zip_code) !== nextZip) fields.client_zip_code = nextZip;
+        const { data, error } = await supabase
+          .from('bookings')
+          .update(fields as any)
+          .eq('id', booking.id)
+          .eq('client_user_id', user.id)
+          .select('id');
+        if (error || !data || data.length !== 1) {
+          Alert.alert('Could not save', error?.message || 'The save did not update your upcoming bookings.');
+          await fetchData();
+          return;
+        }
+      }
+
+      setEditModal(null);
+      await fetchData();
+      if (openBookings.length === 0) {
+        Alert.alert('Zip code saved', 'Your profile zip code was updated. Street, city, and state are stored on upcoming and pending bookings, and you do not have any of those. Cancelled, approved, and past bookings were not changed.');
+      }
+    };
+
+    if (bookingsToUpdate.length === 0) {
+      await applyAddress();
+      return;
+    }
+
+    const count = bookingsToUpdate.length;
+    const visitWord = count === 1 ? 'booking' : 'bookings';
+    const zipNote = zipChanges.length > 0
+      ? ` The zip code will change on ${zipChanges.length} of them. If no provider covers ${nextZip}, each of those bookings notifies the agency.`
+      : ' Their zip codes will stay the same.';
+    Alert.alert(
+      'Update open bookings?',
+      `This updates the address on ${count} upcoming or pending ${visitWord}.${zipNote} Cancelled, approved, and past bookings will not change.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Update bookings', onPress: () => { applyAddress(); } },
+      ]
+    );
   };
   const saveResponsible = async () => {
     const ok = await saveBookingField({ client_responsible_party: editCareFor, client_responsible_party_email: editRespEmail, client_responsible_party_name: editRespName });
