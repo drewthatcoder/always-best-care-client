@@ -8,6 +8,8 @@ import {
   SafeAreaView,
   ActivityIndicator,
   RefreshControl,
+  Alert,
+  Linking,
 } from 'react-native';
 import { format } from 'date-fns';
 import { supabase } from '../supabase';
@@ -37,7 +39,17 @@ interface Booking {
   end_time: string;
   service: string;
   status: string;
+  provider_user_id: string | null;
 }
+
+const AGENCY_PHONE_DISPLAY = '(916) 884-1983';
+const AGENCY_PHONE_TEL = 'tel:9168841983';
+
+const callAgency = () => {
+  Linking.openURL(AGENCY_PHONE_TEL).catch(() => {
+    Alert.alert('Agency phone', AGENCY_PHONE_DISPLAY);
+  });
+};
 
 interface Profile {
   first_name: string | null;
@@ -78,7 +90,7 @@ const HomeScreen = ({ navigation }: any) => {
     // Fetch upcoming bookings
     const { data: bks } = await supabase
       .from('bookings')
-      .select('id, scheduled_date, start_time, end_time, service, status')
+      .select('id, scheduled_date, start_time, end_time, service, status, provider_user_id')
       .eq('client_user_id', user.id)
       .in('status', ['upcoming', 'approved', 'pending_client'])
       .order('scheduled_date', { ascending: true })
@@ -194,24 +206,27 @@ const HomeScreen = ({ navigation }: any) => {
             upcomingBookings.map(b => {
               const statusColors = getStatusColor(b.status);
               return (
-                <TouchableOpacity
-                  key={b.id}
-                  style={s.bookingCard}
-                  onPress={() => navigation.navigate('Booking')}
-                >
-                  <View style={s.bookingCardLeft}>
+                <View key={b.id} style={s.bookingCard}>
+                  <TouchableOpacity style={s.bookingCardLeft} onPress={() => navigation.navigate('Booking')}>
                     <Text style={s.bookingDate}>
                       {format(new Date(b.scheduled_date + 'T00:00:00'), 'EEE, MMM d')}
                     </Text>
                     <Text style={s.bookingTime}>{b.start_time} – {b.end_time}</Text>
                     <Text style={s.bookingService}>{b.service}</Text>
+                  </TouchableOpacity>
+                  <View style={s.bookingCardRight}>
+                    {b.provider_user_id ? (
+                      <TouchableOpacity style={s.callBtn} onPress={callAgency} accessibilityRole="link">
+                        <Text style={s.callBtnText}>📞 Call {AGENCY_PHONE_DISPLAY}</Text>
+                      </TouchableOpacity>
+                    ) : null}
+                    <View style={[s.statusBadge, { backgroundColor: statusColors.bg }]}>
+                      <Text style={[s.statusText, { color: statusColors.text }]}>
+                        {getStatusLabel(b.status)}
+                      </Text>
+                    </View>
                   </View>
-                  <View style={[s.statusBadge, { backgroundColor: statusColors.bg }]}>
-                    <Text style={[s.statusText, { color: statusColors.text }]}>
-                      {getStatusLabel(b.status)}
-                    </Text>
-                  </View>
-                </TouchableOpacity>
+                </View>
               );
             })
           )}
@@ -226,7 +241,17 @@ const HomeScreen = ({ navigation }: any) => {
               <TouchableOpacity
                 key={i}
                 style={s.serviceCard}
-                onPress={() => navigation.navigate('Booking')}
+                onPress={() => {
+                  if (svc.name === 'Transportation') {
+                    Alert.alert(
+                      'Transportation',
+                      `Please call the agency at ${AGENCY_PHONE_DISPLAY} to discuss how much time you need and the destination address.`,
+                      [{ text: 'OK', onPress: () => navigation.navigate('Booking') }]
+                    );
+                    return;
+                  }
+                  navigation.navigate('Booking');
+                }}
               >
                 <Text style={s.serviceEmoji}>{svc.emoji}</Text>
                 <Text style={s.serviceName}>{svc.name}</Text>
@@ -280,9 +305,12 @@ const s = StyleSheet.create({
   // Booking cards
   bookingCard:      { backgroundColor: COLORS.white, borderRadius: 12, padding: 14, marginBottom: 10, borderWidth: 1, borderColor: COLORS.border, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   bookingCardLeft:  { flex: 1 },
+  bookingCardRight: { alignItems: 'flex-end', gap: 8, marginLeft: 8 },
   bookingDate:      { fontSize: 16, fontWeight: '700', color: COLORS.text },
   bookingTime:      { fontSize: 14, color: COLORS.textMuted, marginTop: 2 },
   bookingService:   { fontSize: 15, color: COLORS.primary, fontWeight: '500', marginTop: 4 },
+  callBtn:          { marginTop: 8, alignSelf: 'flex-start', backgroundColor: COLORS.primaryLight, borderRadius: 8, paddingVertical: 8, paddingHorizontal: 12 },
+  callBtnText:      { color: COLORS.primary, fontWeight: '700', fontSize: 13 },
   statusBadge:      { borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6 },
   statusText:       { fontSize: 13, fontWeight: '600' },
 

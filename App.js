@@ -6,7 +6,7 @@ import { StripeProvider } from '@stripe/stripe-react-native';
 import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
 import Constants from 'expo-constants';
-import { Platform } from 'react-native';
+import { Alert, AppState, Platform } from 'react-native';
 import { supabase } from './supabase';
 import LoginScreen from './screens/LoginScreen';
 import HomeScreen from './screens/HomeScreen';
@@ -90,6 +90,122 @@ export default function App() {
     return () => {
       Notifications.removeNotificationSubscription(notificationListener.current);
       Notifications.removeNotificationSubscription(responseListener.current);
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    let channel = null;
+    let currentUserId = null;
+    const seen = new Set();
+    const queue = [];
+    let showing = false;
+
+    const markRead = async (id) => {
+      const { error } = await supabase.from('notifications').update({ read: true }).eq('id', id);
+      if (error) seen.delete(id);
+    };
+
+    const pump = () => {
+      if (!active || showing) return;
+      const next = queue.shift();
+      if (!next) return;
+      showing = true;
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        markRead(next.id).finally(() => {
+          showing = false;
+          if (active) pump();
+        });
+      };
+      Alert.alert(next.title || 'Notification', next.body || '', [
+        { text: 'OK', onPress: finish },
+      ], { cancelable: true, onDismiss: finish });
+    };
+
+    const enqueue = (rows) => {
+      (rows || []).forEach((row) => {
+        if (!row?.id || row.read === true || seen.has(row.id)) return;
+        if (currentUserId && row.user_id && row.user_id !== currentUserId) return;
+        seen.add(row.id);
+        queue.push(row);
+      });
+      pump();
+    };
+
+    const loadUnread = async (userId) => {
+      const { data } = await supabase
+        .from('notifications')
+        .select('id, title, body, read, user_id')
+        .eq('user_id', userId)
+        .eq('read', false)
+        .order('created_at', { ascending: true });
+      if (!active || currentUserId !== userId) return;
+      enqueue(data || []);
+    };
+
+    const subscribe = (userId) => {
+      if (channel) supabase.removeChannel(channel);
+      channel = supabase
+        .channel(`client-unread-notifications-${userId}`)
+        .on(
+          'postgres_changes',
+          {
+            event: 'INSERT',
+            schema: 'public',
+            table: 'notifications',
+            filter: `user_id=eq.${userId}`,
+          },
+          (payload) => {
+            if (payload.new) enqueue([payload.new]);
+          }
+        )
+        .subscribe();
+    };
+
+    const startForUser = (userId) => {
+      if (!userId || !active) return;
+      if (currentUserId !== userId) {
+        currentUserId = userId;
+        subscribe(userId);
+      }
+      loadUnread(userId);
+    };
+
+    const stop = () => {
+      currentUserId = null;
+      queue.length = 0;
+      if (channel) {
+        supabase.removeChannel(channel);
+        channel = null;
+      }
+    };
+
+    supabase.auth.getSession().then(({ data }) => {
+      if (!active) return;
+      if (data.session?.user?.id) startForUser(data.session.user.id);
+    });
+
+    const { data: authSub } = supabase.auth.onAuthStateChange((_event, session) => {
+      const userId = session?.user?.id || null;
+      setTimeout(() => {
+        if (!active) return;
+        if (userId) startForUser(userId);
+        else stop();
+      }, 0);
+    });
+
+    const appStateSub = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active' && currentUserId) loadUnread(currentUserId);
+    });
+
+    return () => {
+      active = false;
+      appStateSub.remove();
+      authSub.subscription.unsubscribe();
+      if (channel) supabase.removeChannel(channel);
     };
   }, []);
 
