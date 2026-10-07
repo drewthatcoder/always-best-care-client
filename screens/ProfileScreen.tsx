@@ -15,6 +15,7 @@ import {
 } from 'react-native';
 import { format } from 'date-fns';
 import { supabase } from '../supabase';
+import { friendlyAlertMessage } from '../userFacingError';
 
 const COLORS = {
   primary:      '#3D52A0',
@@ -224,7 +225,7 @@ const ProfileScreen = ({ navigation }: any) => {
       .eq('client_user_id', user.id)
       .select('id');
     if (error || !data || data.length !== ids.length) {
-      Alert.alert('Could not save', error?.message || 'The save did not update your upcoming bookings.');
+      Alert.alert('Could not save', friendlyAlertMessage(error, 'The save did not update your upcoming bookings.'));
       return false;
     }
     await fetchData();
@@ -259,7 +260,7 @@ const ProfileScreen = ({ navigation }: any) => {
     try {
       const { data, error } = await supabase.rpc('client_request_call', { p_booking_id: shift.id });
       if (error) {
-        showRequestCallError(error.message || 'Something went wrong.');
+        showRequestCallError(friendlyAlertMessage(error, 'Something went wrong.'));
         return;
       }
       const created = Number(data);
@@ -273,7 +274,7 @@ const ProfileScreen = ({ navigation }: any) => {
       }
       fetchData();
     } catch (err: any) {
-      showRequestCallError(err?.message || 'Something went wrong.');
+      showRequestCallError(friendlyAlertMessage(err, 'Something went wrong.'));
     } finally {
       setRequestingCallId(null);
     }
@@ -340,7 +341,7 @@ const ProfileScreen = ({ navigation }: any) => {
       if (profileZipChanged) {
         const { error: profileError } = await supabase.from('profiles').update({ zip_code: nextZip } as any).eq('user_id', user.id);
         if (profileError) {
-          Alert.alert('Could not save zip code', profileError.message || 'The zip code was not saved.');
+          Alert.alert('Could not save zip code', friendlyAlertMessage(profileError, 'The zip code was not saved.'));
           return;
         }
       }
@@ -360,7 +361,7 @@ const ProfileScreen = ({ navigation }: any) => {
           .eq('client_user_id', user.id)
           .select('id');
         if (error || !data || data.length !== 1) {
-          Alert.alert('Could not save', error?.message || 'The save did not update your upcoming bookings.');
+          Alert.alert('Could not save', friendlyAlertMessage(error, 'The save did not update your upcoming bookings.'));
           await fetchData();
           return;
         }
