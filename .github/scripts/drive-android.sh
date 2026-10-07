@@ -10,17 +10,32 @@ APK="${GITHUB_WORKSPACE}/android/app/build/outputs/apk/debug/app-debug.apk"
 PKG="com.cityoftreestech.alwaysbestcare"
 STATUS=0
 
+flatten_screenshots() {
+  local root
+  for root in "$OUT" "$HOME/.maestro/tests" "$HOME/.local/state/maestro" "$GITHUB_WORKSPACE/.maestro"; do
+    if [[ -d "$root" ]]; then
+      find "$root" -type f -name '*.png' -exec cp -n {} "$OUT/" \; || true
+    fi
+  done
+  find "$OUT" -mindepth 1 -type d -exec rm -rf {} + 2>/dev/null || true
+}
+
 collect_artifacts() {
-  if [[ -d "$OUT/maestro-debug" ]]; then
-    find "$OUT/maestro-debug" -type f -name '*.png' -exec cp -n {} "$OUT/" \; || true
-    rm -rf "$OUT/maestro-debug"
-  fi
-  if [[ -d "$HOME/.maestro" ]]; then
-    find "$HOME/.maestro" -type f -name '*.png' -exec cp -n {} "$OUT/" \; || true
-  fi
+  flatten_screenshots
   find "$OUT" -maxdepth 1 -type f -name '*.png' -printf '%f\n' | sort > "$OUT/screenshot-list.txt" || true
   echo "Screenshots:"
   cat "$OUT/screenshot-list.txt" || true
+  local name
+  local missing=0
+  for name in 00-adb-launch.png 01-launch-login.png 02-reopen-login.png 03-reopen-again-login.png; do
+    if [[ ! -s "$OUT/$name" ]]; then
+      echo "Missing screenshot: $name"
+      missing=1
+    fi
+  done
+  if [[ "$missing" -ne 0 ]]; then
+    exit 1
+  fi
 }
 trap collect_artifacts EXIT
 
@@ -48,11 +63,15 @@ run_maestro() {
   local args=()
   local help
   help="$(maestro test --help 2>&1 || true)"
+  mkdir -p "$OUT/maestro-debug"
   if grep -q -- '--debug-output' <<<"$help"; then
     args+=(--debug-output "$OUT/maestro-debug")
   fi
+  if grep -q -- '--flatten-debug-output' <<<"$help"; then
+    args+=(--flatten-debug-output)
+  fi
   if grep -q -- '--test-output-dir' <<<"$help"; then
-    args+=(--test-output-dir "$OUT")
+    args+=(--test-output-dir "$OUT/maestro-debug")
   fi
   maestro test "${args[@]}" "$flow"
 }

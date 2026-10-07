@@ -183,8 +183,13 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p maestro-artifacts
+          find maestro-artifacts -mindepth 2 -type f -name '*.png' -exec cp -n {} maestro-artifacts/ \;
           find maestro-artifacts -type f ! -name '*.png' ! -name 'NOTES.txt' ! -name 'screenshot-list.txt' -delete
-          find maestro-artifacts -type d -empty -delete || true
+          find maestro-artifacts -mindepth 1 -type d -exec rm -rf {} + || true
+          test -s maestro-artifacts/00-adb-launch.png
+          test -s maestro-artifacts/01-launch-login.png
+          test -s maestro-artifacts/02-reopen-login.png
+          test -s maestro-artifacts/03-reopen-again-login.png
 
       - name: Upload screenshots
         if: always()
