@@ -12,11 +12,11 @@ import {
   ScrollView,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import BrandLogo from '../components/BrandLogo';
 import { supabase } from '../supabase';
 
 const COLORS = {
   primary: '#3D52A0',
-  accent: '#7091E6',
   background: '#FFFFFF',
   surface: '#F8F9FF',
   border: '#E2E5F1',
@@ -59,9 +59,7 @@ const LoginScreen = ({ navigation }: any) => {
           showsVerticalScrollIndicator={false}
         >
           <View style={s.logoWrap}>
-            <Text style={s.logoSymbol}>△</Text>
-            <Text style={s.logoText}>Always Best Care®</Text>
-            <Text style={s.logoSub}>senior services</Text>
+            <BrandLogo width={240} />
           </View>
 
           <Text style={s.title}>Client Login</Text>
@@ -117,10 +115,7 @@ const LoginScreen = ({ navigation }: any) => {
 const s = StyleSheet.create({
   safe:         { flex: 1, backgroundColor: COLORS.background },
   container:    { flexGrow: 1, padding: 24, justifyContent: 'center', paddingBottom: 60 },
-  logoWrap:     { alignItems: 'center', marginBottom: 32 },
-  logoSymbol:   { fontSize: 40, color: COLORS.primary },
-  logoText:     { fontSize: 18, fontWeight: '700', color: COLORS.primary, marginTop: 4 },
-  logoSub:      { fontSize: 12, color: COLORS.accent },
+  logoWrap:     { alignItems: 'center', marginBottom: 28 },
   title:        { fontSize: 24, fontWeight: '800', color: COLORS.primary, textAlign: 'center', marginBottom: 4 },
   subtitle:     { fontSize: 14, color: COLORS.textMuted, textAlign: 'center', marginBottom: 28 },
   label:        { fontSize: 14, fontWeight: '500', color: COLORS.text, marginBottom: 6 },

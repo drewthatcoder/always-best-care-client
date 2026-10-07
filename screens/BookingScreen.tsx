@@ -12,6 +12,7 @@ import {
   Linking,
   TextInput,
 } from 'react-native';
+import BrandLogo from '../components/BrandLogo';
 import {
   format,
   startOfMonth,
@@ -525,7 +526,7 @@ const BookingScreen = () => {
   return (
     <SafeAreaView style={s.safe}>
       <View style={s.header}>
-        <Text style={s.headerTitle}>Always Best Care</Text>
+        <BrandLogo width={180} />
       </View>
 
       <ScrollView contentContainerStyle={s.scroll}>
@@ -802,8 +803,7 @@ const BookingScreen = () => {
 
 const s = StyleSheet.create({
   safe:             { flex: 1, backgroundColor: COLORS.background },
-  header:           { paddingVertical: 14, paddingHorizontal: 16, borderBottomWidth: 1, borderBottomColor: COLORS.border, alignItems: 'center' },
-  headerTitle:      { fontSize: 18, fontWeight: '700', color: COLORS.primary },
+  header:           { paddingVertical: 10, paddingHorizontal: 16, borderBottomWidth: 1, borderBottomColor: COLORS.border, alignItems: 'center', backgroundColor: COLORS.background },
   scroll:           { padding: 16, paddingBottom: 40 },
   pageTitle:        { fontSize: 20, fontWeight: '700', color: COLORS.primary, marginBottom: 16 },
   section:          { marginBottom: 20 },
