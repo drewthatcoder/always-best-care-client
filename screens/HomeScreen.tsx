@@ -12,6 +12,7 @@ import {
   Linking,
 } from 'react-native';
 import { format } from 'date-fns';
+import { useFocusEffect } from '@react-navigation/native';
 import BrandLogo from '../components/BrandLogo';
 import { supabase } from '../supabase';
 
@@ -110,14 +111,34 @@ const HomeScreen = ({ navigation }: any) => {
     setRefreshing(false);
   }, []);
 
-  useEffect(() => {
+  useFocusEffect(useCallback(() => {
     fetchData();
-    const channel = supabase
-      .channel('home-screen')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'bookings' }, fetchData)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'notifications' }, fetchData)
-      .subscribe();
-    return () => { supabase.removeChannel(channel); };
+  }, [fetchData]));
+
+  useEffect(() => {
+    let active = true;
+    let channel: ReturnType<typeof supabase.channel> | null = null;
+
+    supabase.auth.getSession().then(({ data }) => {
+      const userId = data.session?.user?.id;
+      if (!active || !userId) return;
+      // notifications is the only table in supabase_realtime. Listening for
+      // bookings on this channel makes the whole subscription fail, so the
+      // badge never hears read or insert events.
+      channel = supabase
+        .channel(`home-notifications-${userId}`)
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'notifications', filter: `user_id=eq.${userId}` },
+          () => { fetchData(); }
+        )
+        .subscribe();
+    });
+
+    return () => {
+      active = false;
+      if (channel) supabase.removeChannel(channel);
+    };
   }, [fetchData]);
 
   const onRefresh = () => { setRefreshing(true); fetchData(); };
@@ -220,7 +241,7 @@ const HomeScreen = ({ navigation }: any) => {
                     <Text style={s.bookingService}>{b.service}</Text>
                   </TouchableOpacity>
                   <View style={s.bookingCardRight}>
-                    {b.provider_user_id ? (
+                    {b.provider_user_id && b.status !== 'cancelled' ? (
                       <TouchableOpacity style={s.callBtn} onPress={callAgency} accessibilityRole="link">
                         <Text style={s.callBtnText}>📞 Call {AGENCY_PHONE_DISPLAY}</Text>
                       </TouchableOpacity>
