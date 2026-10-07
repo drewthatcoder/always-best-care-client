@@ -2,7 +2,7 @@
   "expo": {
     "name": "Always Best Care",
     "slug": "always-best-care",
-    "version": "1.0.1",
+    "version": "1.0.2",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -49,7 +49,7 @@
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.cityoftreestech.alwaysbestcare",
-      "buildNumber": "7",
+      "buildNumber": "8",
       "infoPlist": {
         "NSCameraUsageDescription": "Used for profile photos",
         "NSPhotoLibraryUsageDescription": "Used for profile photos",
@@ -58,7 +58,7 @@
     },
     "android": {
       "package": "com.cityoftreestech.alwaysbestcare",
-      "versionCode": 5,
+      "versionCode": 6,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
