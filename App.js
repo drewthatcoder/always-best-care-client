@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { NavigationContainer } from '@react-navigation/native';
+import { NavigationContainer, createNavigationContainerRef } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { StripeProvider } from '@stripe/stripe-react-native';
@@ -25,6 +25,7 @@ Notifications.setNotificationHandler({
 
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
+const navigationRef = createNavigationContainerRef();
 
 async function registerForPushNotifications() {
   if (!Device.isDevice) return null;
@@ -102,8 +103,21 @@ export default function App() {
     let showing = false;
 
     const markRead = async (id) => {
-      const { error } = await supabase.from('notifications').update({ read: true }).eq('id', id);
-      if (error) seen.delete(id);
+      const { data, error } = await supabase
+        .from('notifications')
+        .update({ read: true })
+        .eq('id', id)
+        .select('id');
+      if (error || !data || data.length !== 1) {
+        console.warn('Failed to mark notification read', { id, error, updated: data?.length ?? 0 });
+        seen.delete(id);
+        return false;
+      }
+      return true;
+    };
+
+    const openNotifications = () => {
+      if (navigationRef.isReady()) navigationRef.navigate('Notifications');
     };
 
     const pump = () => {
@@ -120,30 +134,46 @@ export default function App() {
           if (active) pump();
         });
       };
-      Alert.alert(next.title || 'Notification', next.body || '', [
-        { text: 'OK', onPress: finish },
-      ], { cancelable: true, onDismiss: finish });
+      const more = next.moreCount > 0 ? `\n\nYou have ${next.moreCount} more unread.` : '';
+      const buttons = [{ text: 'OK', onPress: finish }];
+      if (next.moreCount > 0) {
+        buttons.unshift({
+          text: 'View notifications',
+          onPress: () => {
+            finish();
+            openNotifications();
+          },
+        });
+      }
+      Alert.alert(next.title || 'Notification', `${next.body || ''}${more}`, buttons, {
+        cancelable: true,
+        onDismiss: finish,
+      });
     };
 
-    const enqueue = (rows) => {
+    const presentUnread = (rows) => {
+      const fresh = [];
       (rows || []).forEach((row) => {
         if (!row?.id || row.read === true || seen.has(row.id)) return;
         if (currentUserId && row.user_id && row.user_id !== currentUserId) return;
-        seen.add(row.id);
-        queue.push(row);
+        fresh.push(row);
       });
+      if (!fresh.length) return;
+      fresh.sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
+      fresh.forEach((row) => seen.add(row.id));
+      queue.push({ ...fresh[0], moreCount: fresh.length - 1 });
       pump();
     };
 
     const loadUnread = async (userId) => {
       const { data } = await supabase
         .from('notifications')
-        .select('id, title, body, read, user_id')
+        .select('id, title, body, read, user_id, created_at')
         .eq('user_id', userId)
         .eq('read', false)
-        .order('created_at', { ascending: true });
+        .order('created_at', { ascending: false });
       if (!active || currentUserId !== userId) return;
-      enqueue(data || []);
+      presentUnread(data || []);
     };
 
     const subscribe = (userId) => {
@@ -159,7 +189,7 @@ export default function App() {
             filter: `user_id=eq.${userId}`,
           },
           (payload) => {
-            if (payload.new) enqueue([payload.new]);
+            if (payload.new) presentUnread([payload.new]);
           }
         )
         .subscribe();
@@ -211,7 +241,7 @@ export default function App() {
 
   return (
     <StripeProvider publishableKey="pk_live_51TBfSlCv6ZSrYUtDHAxWCTQdDrNg8MEyS0CRNYbonrSqN84RWLFEWmYBNyeAPlagZ6NinoGNATZ74Nxtvy2CIxBk00RoTcRDf9">
-      <NavigationContainer>
+      <NavigationContainer ref={navigationRef}>
         <Stack.Navigator initialRouteName="Login">
           <Stack.Screen name="Login" component={LoginScreen} options={{ headerShown: false }} />
           <Stack.Screen name="SignUp" component={SignUpScreen} options={{ headerShown: false }} />

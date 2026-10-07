@@ -193,9 +193,9 @@ const ProfileScreen = ({ navigation }: any) => {
   };
 
   const handleDecline = async (shift: PendingShift) => {
-    if (shift.provider_user_id) {
-      Alert.alert('Provider notified', 'The provider has been asked to call you.');
-    }
+    // TODO(client_request_call): Call public.client_request_call(p_booking_id uuid)
+    // with shift.id once Software Lead confirms the signature. Do not wire this RPC in until then.
+    Alert.alert('Request received', 'The agency will follow up.');
     fetchData();
   };
 

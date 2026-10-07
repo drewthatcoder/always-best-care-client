@@ -86,14 +86,19 @@ const extractZip = (value?: string | null): string => {
 };
 
 const resolveClientZip = async (userId: string): Promise<string> => {
-  const { data: profile } = await supabase
+  const { data: profiles, error } = await supabase
     .from('profiles')
-    .select('zip_code')
+    .select('zip_code, updated_at, created_at')
     .eq('user_id', userId)
-    .single();
+    .order('updated_at', { ascending: false, nullsFirst: false })
+    .order('created_at', { ascending: false, nullsFirst: false });
 
-  const profileZip = extractZip(profile?.zip_code);
-  if (profileZip) return profileZip;
+  if (error) console.warn('Profile zip lookup failed', error);
+
+  for (const row of profiles || []) {
+    const zip = extractZip(row.zip_code);
+    if (zip) return zip;
+  }
 
   const { data: prior } = await supabase
     .from('bookings')
@@ -107,6 +112,8 @@ const resolveClientZip = async (userId: string): Promise<string> => {
   }
   return '';
 };
+
+const canClientCancel = (status: string) => status === 'upcoming' || status === 'pending_client';
 
 const AgencyCallButton = () => (
   <TouchableOpacity style={s.callBtn} onPress={callAgency} accessibilityRole="link">
@@ -366,9 +373,9 @@ const BookingScreen = () => {
     setDecliningId(shift.id);
     setAltSlots(getAltTimeSlots(shift));
     setAltTime('');
-    if (shift.provider_user_id) {
-      Alert.alert('Provider notified', 'The provider has been asked to call you.');
-    }
+    // TODO(client_request_call): Call public.client_request_call(p_booking_id uuid)
+    // with shift.id once Software Lead confirms the signature. Do not wire this RPC in until then.
+    Alert.alert('Request received', 'The agency will follow up.');
   };
 
   const handleSendAltTime = async (shift: Booking) => {
@@ -405,7 +412,7 @@ const BookingScreen = () => {
   const pendingShifts = bookings.filter(b => b.status === 'pending_client');
 
   const handleCancelBooking = (booking: Booking) => {
-    if (booking.status === 'cancelled') return;
+    if (!canClientCancel(booking.status)) return;
     Alert.alert(
       'Cancel booking',
       'This will cancel your booking. The agency will be notified.',
@@ -418,14 +425,20 @@ const BookingScreen = () => {
             setUpdating(booking.id);
             const { data: { user } } = await supabase.auth.getUser();
             if (!user) { setUpdating(null); return; }
-            const { error } = await supabase
+            const { data, error } = await supabase
               .from('bookings')
               .update({ status: 'cancelled' } as any)
               .eq('id', booking.id)
-              .eq('client_user_id', user.id);
+              .eq('client_user_id', user.id)
+              .in('status', ['upcoming', 'pending_client'])
+              .select('id');
             setUpdating(null);
-            if (error) Alert.alert('Error', 'Could not cancel booking');
-            else fetchBookings();
+            if (error || !data || data.length !== 1) {
+              console.warn('Cancel booking did not update a row', { id: booking.id, error, updated: data?.length ?? 0 });
+              Alert.alert('Error', 'Could not cancel booking');
+            } else {
+              fetchBookings();
+            }
           },
         },
       ]
@@ -448,17 +461,17 @@ const BookingScreen = () => {
   };
 
   const renderBookingSummary = (b: Booking, showFullDate = false) => (
-    <View key={b.id} style={s.bookingCard}>
-      <Text style={s.bookingService}>{b.service}</Text>
+    <View key={b.id} style={[s.bookingCard, b.status === 'cancelled' && s.bookingCardCancelled]}>
+      <Text style={[s.bookingService, b.status === 'cancelled' && s.bookingCancelledText]}>{b.service}</Text>
       <Text style={s.bookingTime}>
         {showFullDate ? `${format(new Date(b.scheduled_date + 'T00:00:00'), 'MMM d, yyyy')} · ` : ''}
         {b.start_time} – {b.end_time}
       </Text>
-      <Text style={[s.bookingStatus, b.status === 'approved' && { color: COLORS.success }, b.status === 'pending_client' && { color: COLORS.danger }]}>
+      <Text style={[s.bookingStatus, b.status === 'approved' && { color: COLORS.success }, b.status === 'pending_client' && { color: COLORS.danger }, b.status === 'cancelled' && s.cancelledMark]}>
         {bookingStatusLabel(b.status)}
       </Text>
       {b.provider_user_id ? <AgencyCallButton /> : null}
-      {b.status === 'cancelled' ? null : (
+      {canClientCancel(b.status) ? (
         <TouchableOpacity
           style={s.cancelBookingBtn}
           onPress={() => handleCancelBooking(b)}
@@ -466,7 +479,12 @@ const BookingScreen = () => {
         >
           <Text style={s.cancelBookingText}>{updating === b.id ? 'Cancelling...' : 'Cancel booking'}</Text>
         </TouchableOpacity>
-      )}
+      ) : null}
+      {b.status === 'approved' ? (
+        <TouchableOpacity onPress={callAgency} accessibilityRole="link">
+          <Text style={s.approvedCancelText}>To cancel an approved booking, call the agency at {AGENCY_PHONE_DISPLAY}</Text>
+        </TouchableOpacity>
+      ) : null}
     </View>
   );
 
@@ -525,7 +543,7 @@ const BookingScreen = () => {
                       </View>
                     </View>
                   )}
-                  {shift.status === 'cancelled' ? null : (
+                  {canClientCancel(shift.status) ? (
                     <TouchableOpacity
                       style={s.cancelBookingBtn}
                       onPress={() => handleCancelBooking(shift)}
@@ -533,7 +551,7 @@ const BookingScreen = () => {
                     >
                       <Text style={s.cancelBookingText}>{updating === shift.id ? 'Cancelling...' : 'Cancel booking'}</Text>
                     </TouchableOpacity>
-                  )}
+                  ) : null}
                 </View>
               );
             })}
@@ -574,8 +592,10 @@ const BookingScreen = () => {
                   {dayBooks.length > 0 && (
                     <View>
                       {dayBooks.slice(0, 2).map(b => (
-                        <View key={b.id} style={[s.dayBadge, b.status === 'pending_client' && s.dayBadgePending, b.status === 'approved' && s.dayBadgeApproved]}>
-                          <Text style={s.dayBadgeText} numberOfLines={1}>{b.service.split(',')[0]}</Text>
+                        <View key={b.id} style={[s.dayBadge, b.status === 'pending_client' && s.dayBadgePending, b.status === 'approved' && s.dayBadgeApproved, b.status === 'cancelled' && s.dayBadgeCancelled]}>
+                          <Text style={[s.dayBadgeText, b.status === 'cancelled' && s.dayBadgeCancelledText]} numberOfLines={1}>
+                            {b.status === 'cancelled' ? 'Cancelled' : b.service.split(',')[0]}
+                          </Text>
                         </View>
                       ))}
                       {dayBooks.length > 2 && <Text style={s.moreText}>+{dayBooks.length - 2}</Text>}
@@ -798,7 +818,9 @@ const s = StyleSheet.create({
   dayBadge:         { backgroundColor: COLORS.primaryLight, borderRadius: 3, paddingHorizontal: 3, paddingVertical: 1, marginBottom: 2 },
   dayBadgePending:  { backgroundColor: COLORS.dangerLight },
   dayBadgeApproved: { backgroundColor: COLORS.successLight },
+  dayBadgeCancelled:{ backgroundColor: '#F3F4F6' },
   dayBadgeText:     { fontSize: 9, color: COLORS.primary, fontWeight: '600' },
+  dayBadgeCancelledText: { color: COLORS.textMuted, textDecorationLine: 'line-through' },
   moreText:         { fontSize: 9, color: COLORS.textMuted },
   sidebar:          { paddingTop: 4 },
   sidebarTitle:     { fontSize: 18, fontWeight: '700', color: COLORS.text, marginBottom: 4 },
@@ -809,9 +831,13 @@ const s = StyleSheet.create({
   selectedLabel:    { fontSize: 14, fontWeight: '600', color: COLORS.text, marginBottom: 8 },
   noBookings:       { fontSize: 13, color: COLORS.textMuted },
   bookingCard:      { backgroundColor: COLORS.surface, borderRadius: 8, padding: 12, marginBottom: 8 },
+  bookingCardCancelled: { backgroundColor: '#F3F4F6', borderWidth: 1, borderColor: COLORS.border },
   bookingService:   { fontSize: 14, fontWeight: '600', color: COLORS.text },
+  bookingCancelledText: { color: COLORS.textMuted, textDecorationLine: 'line-through' },
   bookingTime:      { fontSize: 12, color: COLORS.textMuted, marginTop: 2 },
   bookingStatus:    { fontSize: 12, fontWeight: '600', marginTop: 4, color: COLORS.textMuted },
+  cancelledMark:    { color: COLORS.danger, fontWeight: '700' },
+  approvedCancelText: { marginTop: 8, color: COLORS.primary, fontWeight: '600', fontSize: 13 },
   callBtn:          { marginTop: 8, alignSelf: 'flex-start', backgroundColor: COLORS.primaryLight, borderRadius: 8, paddingVertical: 8, paddingHorizontal: 12 },
   callBtnText:      { color: COLORS.primary, fontWeight: '700', fontSize: 13 },
   cancelBookingBtn: { marginTop: 8, alignSelf: 'flex-start', paddingVertical: 4 },
