@@ -1,29 +1,59 @@
 {
   "expo": {
-    "name": "testapp",
-    "slug": "testapp",
-    "version": "1.0.0",
+    "name": "Always Best Care",
+    "slug": "always-best-care",
+    "version": "1.0.1",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
-    "newArchEnabled": true,
+    "newArchEnabled": false,
+    "description": "Always Best Care connects clients with trusted home care providers for personalized in-home services.",
+    "plugins": [
+      [
+        "@stripe/stripe-react-native",
+        {
+          "merchantIdentifier": "merchant.com.alwaysbestcare",
+          "enableGooglePay": false
+        }
+      ],
+      "expo-notifications",
+      "@react-native-community/datetimepicker",
+      "expo-status-bar"
+    ],
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
+      "backgroundColor": "#1a237e"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": false,
+      "bundleIdentifier": "com.cityoftreestech.alwaysbestcare",
+      "buildNumber": "7",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Used for profile photos",
+        "NSPhotoLibraryUsageDescription": "Used for profile photos",
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
+      "package": "com.cityoftreestech.alwaysbestcare",
+      "versionCode": 5,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#ffffff"
+        "backgroundColor": "#1a237e"
       },
-      "edgeToEdgeEnabled": true
+      "edgeToEdgeEnabled": true,
+      "permissions": [
+        "NOTIFICATIONS"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "431542aa-d1cd-45b7-867a-3b39f194dd3d"
+      }
     }
   }
 }
