@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { NavigationContainer, createNavigationContainerRef } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
@@ -6,7 +6,7 @@ import { StripeProvider } from '@stripe/stripe-react-native';
 import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
 import Constants from 'expo-constants';
-import { Alert, AppState, Platform } from 'react-native';
+import { ActivityIndicator, Alert, AppState, Platform, View } from 'react-native';
 import { supabase } from './supabase';
 import LoginScreen from './screens/LoginScreen';
 import HomeScreen from './screens/HomeScreen';
@@ -67,6 +67,8 @@ function TabNavigator() {
 export default function App() {
   const notificationListener = useRef();
   const responseListener = useRef();
+  const [sessionReady, setSessionReady] = useState(false);
+  const [initialRoute, setInitialRoute] = useState('Login');
 
   useEffect(() => {
     // Register for push notifications
@@ -234,7 +236,13 @@ export default function App() {
 
     supabase.auth.getSession().then(({ data }) => {
       if (!active) return;
-      if (data.session?.user?.id) startForUser(data.session.user.id);
+      if (data.session?.user?.id) {
+        setInitialRoute('Main');
+        startForUser(data.session.user.id);
+      }
+      setSessionReady(true);
+    }).catch(() => {
+      if (active) setSessionReady(true);
     });
 
     const { data: authSub } = supabase.auth.onAuthStateChange((_event, session) => {
@@ -258,10 +266,18 @@ export default function App() {
     };
   }, []);
 
+  if (!sessionReady) {
+    return (
+      <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#FFFFFF' }}>
+        <ActivityIndicator color="#3D52A0" />
+      </View>
+    );
+  }
+
   return (
     <StripeProvider publishableKey="pk_live_51TBfSlCv6ZSrYUtDHAxWCTQdDrNg8MEyS0CRNYbonrSqN84RWLFEWmYBNyeAPlagZ6NinoGNATZ74Nxtvy2CIxBk00RoTcRDf9">
       <NavigationContainer ref={navigationRef}>
-        <Stack.Navigator initialRouteName="Login">
+        <Stack.Navigator initialRouteName={initialRoute}>
           <Stack.Screen name="Login" component={LoginScreen} options={{ headerShown: false }} />
           <Stack.Screen name="SignUp" component={SignUpScreen} options={{ headerShown: false }} />
           <Stack.Screen name="Main" component={TabNavigator} options={{ headerShown: false }} />

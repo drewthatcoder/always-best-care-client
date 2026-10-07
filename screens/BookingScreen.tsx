@@ -243,7 +243,10 @@ const BookingScreen = () => {
   };
 
   const createBooking = async (userId: string, zip: string) => {
-    if (!newBookingDate || savingRef.current) return;
+    if (!newBookingDate) {
+      Alert.alert('Could not confirm booking', 'Choose a date and try again.');
+      return;
+    }
     const hourBlock = HOURS.find(h => h.id === selectedHour);
     const cleanZip = extractZip(zip);
     if (!hourBlock || !cleanZip) {
@@ -253,8 +256,6 @@ const BookingScreen = () => {
       return;
     }
 
-    savingRef.current = true;
-    setSavingBooking(true);
     const { error } = await supabase.from('bookings').insert({
       client_user_id: userId,
       scheduled_date: format(newBookingDate, 'yyyy-MM-dd'),
@@ -264,11 +265,9 @@ const BookingScreen = () => {
       status: 'upcoming',
       client_zip_code: cleanZip,
     } as any);
-    savingRef.current = false;
-    setSavingBooking(false);
 
     if (error) {
-      Alert.alert('Error', 'Could not create booking');
+      Alert.alert('Could not confirm booking', error.message || 'Could not create booking');
       return;
     }
 
@@ -288,17 +287,35 @@ const BookingScreen = () => {
     if (!selectedHour) { Alert.alert('Please select your preferred hours'); return; }
     if (savingRef.current) return;
 
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) { Alert.alert('Not logged in'); return; }
+    savingRef.current = true;
+    setSavingBooking(true);
+    try {
+      const { data, error } = await supabase.auth.getSession();
+      if (error || !data.session?.user) {
+        Alert.alert(
+          'Could not confirm booking',
+          error?.message || 'You are not signed in. Log in and try again.'
+        );
+        return;
+      }
 
-    const zip = await resolveClientZip(user.id);
-    if (!zip) {
-      setZipDraft('');
-      setServicePickerVisible(false);
-      setZipModalVisible(true);
-      return;
+      const zip = await resolveClientZip(data.session.user.id);
+      if (!zip) {
+        setZipDraft('');
+        setServicePickerVisible(false);
+        setZipModalVisible(true);
+        return;
+      }
+      await createBooking(data.session.user.id, zip);
+    } catch (err: any) {
+      Alert.alert(
+        'Could not confirm booking',
+        err?.message || 'The booking was not saved. Check your connection and try again.'
+      );
+    } finally {
+      savingRef.current = false;
+      setSavingBooking(false);
     }
-    await createBooking(user.id, zip);
   };
 
   const handleSubmitZip = async () => {
@@ -307,10 +324,37 @@ const BookingScreen = () => {
       Alert.alert('Zip code required', 'Enter the 5-digit zip code for the address where care will be provided.');
       return;
     }
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) { Alert.alert('Not logged in'); return; }
-    await supabase.from('profiles').update({ zip_code: zip } as any).eq('user_id', user.id);
-    await createBooking(user.id, zip);
+    if (savingRef.current) return;
+
+    savingRef.current = true;
+    setSavingBooking(true);
+    try {
+      const { data, error } = await supabase.auth.getSession();
+      if (error || !data.session?.user) {
+        Alert.alert(
+          'Could not confirm booking',
+          error?.message || 'You are not signed in. Log in and try again.'
+        );
+        return;
+      }
+      const { error: profileError } = await supabase
+        .from('profiles')
+        .update({ zip_code: zip } as any)
+        .eq('user_id', data.session.user.id);
+      if (profileError) {
+        Alert.alert('Could not save zip code', profileError.message || 'The zip code was not saved.');
+        return;
+      }
+      await createBooking(data.session.user.id, zip);
+    } catch (err: any) {
+      Alert.alert(
+        'Could not confirm booking',
+        err?.message || 'The booking was not saved. Check your connection and try again.'
+      );
+    } finally {
+      savingRef.current = false;
+      setSavingBooking(false);
+    }
   };
 
   const handleApprove = async (shift: Booking) => {
@@ -501,7 +545,7 @@ const BookingScreen = () => {
       <Text style={[s.bookingStatus, b.status === 'approved' && { color: COLORS.success }, b.status === 'pending_client' && { color: COLORS.danger }, b.status === 'cancelled' && s.cancelledMark]}>
         {bookingStatusLabel(b.status)}
       </Text>
-      {b.provider_user_id ? <AgencyCallButton /> : null}
+      {b.provider_user_id && b.status !== 'cancelled' ? <AgencyCallButton /> : null}
       {canClientCancel(b.status) ? (
         <TouchableOpacity
           style={s.cancelBookingBtn}

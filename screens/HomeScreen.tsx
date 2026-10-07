@@ -12,6 +12,7 @@ import {
   Linking,
 } from 'react-native';
 import { format } from 'date-fns';
+import { useFocusEffect } from '@react-navigation/native';
 import { supabase } from '../supabase';
 
 // ── Colours ───────────────────────────────────────────────────────────────────
@@ -109,8 +110,11 @@ const HomeScreen = ({ navigation }: any) => {
     setRefreshing(false);
   }, []);
 
-  useEffect(() => {
+  useFocusEffect(useCallback(() => {
     fetchData();
+  }, [fetchData]));
+
+  useEffect(() => {
     const channel = supabase
       .channel('home-screen')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'bookings' }, fetchData)
@@ -215,7 +219,7 @@ const HomeScreen = ({ navigation }: any) => {
                     <Text style={s.bookingService}>{b.service}</Text>
                   </TouchableOpacity>
                   <View style={s.bookingCardRight}>
-                    {b.provider_user_id ? (
+                    {b.provider_user_id && b.status !== 'cancelled' ? (
                       <TouchableOpacity style={s.callBtn} onPress={callAgency} accessibilityRole="link">
                         <Text style={s.callBtnText}>📞 Call {AGENCY_PHONE_DISPLAY}</Text>
                       </TouchableOpacity>

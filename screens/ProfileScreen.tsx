@@ -156,33 +156,72 @@ const ProfileScreen = ({ navigation }: any) => {
 
   const onRefresh = () => { setRefreshing(true); fetchData(); };
 
-  const latestBooking = bookings.length > 0 ? bookings[0] : null;
-  const clientPhone   = latestBooking?.client_phone || '';
-  const clientDob     = latestBooking?.client_date_of_birth || '';
-  const clientHeight  = latestBooking?.client_height || '';
-  const clientWeight  = latestBooking?.client_weight || '';
-  const clientAddress = latestBooking?.client_address || '';
-  const clientAddress2= latestBooking?.client_address_line2 || '';
-  const clientCity    = latestBooking?.client_city || '';
-  const clientState   = latestBooking?.client_state || '';
-  const clientZip     = latestBooking?.client_zip_code || profile?.zip_code || '';
-  const careFor       = latestBooking?.client_responsible_party || 'myself';
-  const respEmail     = latestBooking?.client_responsible_party_email || userEmail;
-  const respName      = latestBooking?.client_responsible_party_name || '';
-  const servicesRaw   = latestBooking?.service || '';
-  const hourStart     = latestBooking?.start_time || '';
-  const hourEnd       = latestBooking?.end_time || '';
-  const frequency     = latestBooking?.client_recurring_weekly || 'Not set';
-  const additionalInfo= latestBooking?.client_additional_info || 'None provided';
-  const serviceList = servicesRaw ? servicesRaw.split(',').map((s: string) => s.trim()).filter(Boolean) : [];
+  const todayIso = format(new Date(), 'yyyy-MM-dd');
+  const openBookings = bookings.filter((b: any) =>
+    (b.status === 'upcoming' || b.status === 'pending_client') && b.scheduled_date >= todayIso
+  );
+  const profileBooking = [...openBookings].sort((a: any, b: any) =>
+    b.scheduled_date.localeCompare(a.scheduled_date)
+  )[0] || null;
+  const serviceTokenToId = (value: string) => {
+    const trimmed = value.trim();
+    const match = ALL_SERVICES.find(svc => svc.id === trimmed || svc.label === trimmed);
+    return match ? match.id : trimmed;
+  };
+  const serviceTokenToLabel = (value: string) => {
+    const trimmed = value.trim();
+    const match = ALL_SERVICES.find(svc => svc.id === trimmed || svc.label === trimmed);
+    return match ? match.label : trimmed;
+  };
+  const clientPhone   = profileBooking?.client_phone || '';
+  const clientDob     = profileBooking?.client_date_of_birth || '';
+  const clientHeight  = profileBooking?.client_height || '';
+  const clientWeight  = profileBooking?.client_weight || '';
+  const clientAddress = profileBooking?.client_address || '';
+  const clientAddress2= profileBooking?.client_address_line2 || '';
+  const clientCity    = profileBooking?.client_city || '';
+  const clientState   = profileBooking?.client_state || '';
+  const clientZip     = profileBooking?.client_zip_code || profile?.zip_code || '';
+  const careFor       = profileBooking?.client_responsible_party || 'myself';
+  const respEmail     = profileBooking?.client_responsible_party_email || userEmail;
+  const respName      = profileBooking?.client_responsible_party_name || '';
+  const servicesRaw   = profileBooking?.service || '';
+  const hourStart     = profileBooking?.start_time || '';
+  const hourEnd       = profileBooking?.end_time || '';
+  const frequency     = profileBooking?.client_recurring_weekly || 'Not set';
+  const additionalInfo= profileBooking?.client_additional_info || 'None provided';
+  const serviceList = servicesRaw
+    ? servicesRaw.split(',').map(serviceTokenToLabel).filter(Boolean)
+    : [];
   const hourLabel = hourStart && hourEnd ? `${hourStart} – ${hourEnd}` : '';
   const scheduledDates = bookings.map((b: any) => b.scheduled_date);
 
   const saveBookingField = async (fields: Record<string, any>) => {
     const { data: { user } } = await supabase.auth.getUser();
-    if (!user || !bookings.length) return;
-    await supabase.from('bookings').update(fields as any).eq('client_user_id', user.id);
-    fetchData();
+    if (!user) {
+      Alert.alert('Not signed in', 'Log in again before saving.');
+      return false;
+    }
+    const ids = openBookings.map((b: any) => b.id);
+    if (ids.length === 0) {
+      Alert.alert(
+        'Not saved on past bookings',
+        'This change only applies to upcoming and pending bookings from today forward. Cancelled, approved, and past visits were left unchanged.'
+      );
+      return false;
+    }
+    const { data, error } = await supabase
+      .from('bookings')
+      .update(fields as any)
+      .in('id', ids)
+      .eq('client_user_id', user.id)
+      .select('id');
+    if (error || !data || data.length !== ids.length) {
+      Alert.alert('Could not save', error?.message || 'The save did not update your upcoming bookings.');
+      return false;
+    }
+    await fetchData();
+    return true;
   };
 
   const handleApprove = async (shift: PendingShift) => {
@@ -237,20 +276,70 @@ const ProfileScreen = ({ navigation }: any) => {
     if (section === 'profile') { setEditPhone(clientPhone); setEditDob(clientDob); setEditHeight(clientHeight); setEditWeight(clientWeight); }
     else if (section === 'address') { setEditAddress(clientAddress); setEditAddress2(clientAddress2); setEditCity(clientCity); setEditState(clientState); setEditZip(clientZip); }
     else if (section === 'responsible') { setEditCareFor(careFor); setEditRespEmail(respEmail); setEditRespName(respName); }
-    else if (section === 'services') { setEditServices(serviceList); }
-    else if (section === 'hours') { setEditHour(hourLabel); }
+    else if (section === 'services') {
+      setEditServices(
+        servicesRaw.split(',').map(serviceTokenToId).filter((id: string) => ALL_SERVICES.some(svc => svc.id === id))
+      );
+    }
+    else if (section === 'hours') {
+      const match = HOURS_OPTIONS.find(o => o.id === hourLabel || `${o.start} – ${o.end}` === hourLabel || o.label === hourLabel);
+      setEditHour(match?.id || '');
+    }
     else if (section === 'schedule') { setEditFrequency(frequency === 'Not set' ? '' : frequency); }
     else if (section === 'info') { setEditAdditionalInfo(additionalInfo === 'None provided' ? '' : additionalInfo); }
     setEditModal(section);
   };
 
-  const saveProfile = async () => { await saveBookingField({ client_phone: editPhone, client_date_of_birth: editDob, client_height: editHeight, client_weight: editWeight }); setEditModal(null); };
-  const saveAddress = async () => { await saveBookingField({ client_address: editAddress, client_address_line2: editAddress2, client_city: editCity, client_state: editState, client_zip_code: editZip }); await supabase.from('profiles').update({ zip_code: editZip } as any).eq('user_id', (await supabase.auth.getUser()).data.user?.id || ''); setEditModal(null); };
-  const saveResponsible = async () => { await saveBookingField({ client_responsible_party: editCareFor, client_responsible_party_email: editRespEmail, client_responsible_party_name: editRespName }); setEditModal(null); };
-  const saveServices = async () => { await saveBookingField({ service: editServices.join(', ') }); setEditModal(null); };
-  const saveHours = async () => { const h = HOURS_OPTIONS.find(o => o.id === editHour); if (h) await saveBookingField({ start_time: h.start, end_time: h.end }); setEditModal(null); };
-  const saveSchedule = async () => { await saveBookingField({ client_recurring_weekly: editFrequency }); setEditModal(null); };
-  const saveInfo = async () => { await saveBookingField({ client_additional_info: editAdditionalInfo }); setEditModal(null); };
+  const saveProfile = async () => {
+    const ok = await saveBookingField({ client_phone: editPhone, client_date_of_birth: editDob, client_height: editHeight, client_weight: editWeight });
+    if (ok) setEditModal(null);
+  };
+  const saveAddress = async () => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      Alert.alert('Not signed in', 'Log in again before saving.');
+      return;
+    }
+    const { error: profileError } = await supabase.from('profiles').update({ zip_code: editZip } as any).eq('user_id', user.id);
+    if (profileError) {
+      Alert.alert('Could not save zip code', profileError.message || 'The zip code was not saved.');
+      return;
+    }
+    if (openBookings.length === 0) {
+      Alert.alert('Zip code saved', 'Your profile zip code was updated. Street, city, and state are stored on upcoming and pending bookings, and you do not have any of those. Cancelled, approved, and past bookings were not changed.');
+      setEditModal(null);
+      fetchData();
+      return;
+    }
+    const ok = await saveBookingField({ client_address: editAddress, client_address_line2: editAddress2, client_city: editCity, client_state: editState, client_zip_code: editZip });
+    if (ok) setEditModal(null);
+  };
+  const saveResponsible = async () => {
+    const ok = await saveBookingField({ client_responsible_party: editCareFor, client_responsible_party_email: editRespEmail, client_responsible_party_name: editRespName });
+    if (ok) setEditModal(null);
+  };
+  const saveServices = async () => {
+    const ids = editServices.map(serviceTokenToId).filter((id, index, all) => id && all.indexOf(id) === index);
+    const ok = await saveBookingField({ service: ids.join(', ') });
+    if (ok) setEditModal(null);
+  };
+  const saveHours = async () => {
+    const h = HOURS_OPTIONS.find(o => o.id === editHour);
+    if (!h) {
+      Alert.alert('Choose hours', 'Select a time block before saving.');
+      return;
+    }
+    const ok = await saveBookingField({ start_time: h.start, end_time: h.end });
+    if (ok) setEditModal(null);
+  };
+  const saveSchedule = async () => {
+    const ok = await saveBookingField({ client_recurring_weekly: editFrequency });
+    if (ok) setEditModal(null);
+  };
+  const saveInfo = async () => {
+    const ok = await saveBookingField({ client_additional_info: editAdditionalInfo });
+    if (ok) setEditModal(null);
+  };
 
   const handleSignOut = async () => {
     Alert.alert('Sign Out', 'Are you sure you want to sign out?', [
@@ -508,7 +597,7 @@ const ProfileScreen = ({ navigation }: any) => {
             <View style={s.modalCard}>
               <Text style={s.modalTitle}>Edit Services</Text>
               {ALL_SERVICES.map(svc => {
-                const sel = editServices.includes(svc.label);
+                const sel = editServices.includes(svc.id);
                 return (
                   <TouchableOpacity key={svc.id} style={[s.serviceRow, sel && s.serviceRowSel]} onPress={() => {
                     if (!sel && svc.id === 'transport') {
@@ -517,7 +606,7 @@ const ProfileScreen = ({ navigation }: any) => {
                         'Please call the agency at (916) 884-1983 to discuss how much time you need and the destination address.'
                       );
                     }
-                    setEditServices(prev => sel ? prev.filter(x => x !== svc.label) : [...prev, svc.label]);
+                    setEditServices(prev => sel ? prev.filter(x => x !== svc.id) : [...prev, svc.id]);
                   }}>
                     <Text style={s.serviceRowEmoji}>{svc.emoji}</Text>
                     <Text style={[s.serviceRowLabel, sel && { color: COLORS.primary, fontWeight: '600' }]}>{svc.label}</Text>
