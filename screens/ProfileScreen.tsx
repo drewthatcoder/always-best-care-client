@@ -17,7 +17,7 @@ import { format } from 'date-fns';
 import { supabase } from '../supabase';
 import { approveBookingStatus } from '../approveBooking';
 import { CardSetupCanceled, getPaymentMethod, saveDefaultCard, type SavedCard } from '../payments';
-import { CARD_LOAD_FAILURE_MESSAGE, friendlyAlertMessage, isUndeployedPaymentFunction } from '../userFacingError';
+import { CARD_LOAD_FAILURE_MESSAGE, friendlyAlertMessage, isNetworkFailure, isUndeployedPaymentFunction } from '../userFacingError';
 
 const COLORS = {
   primary:      '#3D52A0',
@@ -121,6 +121,12 @@ interface PendingShift {
   client_phone: string | null;
 }
 
+/** Supabase returns this (user null, session kept) when getUser() cannot reach the network. */
+function isAuthRetryableFetchError(error: unknown): boolean {
+  return !!error && typeof error === 'object' && 'name' in error
+    && (error as { name: unknown }).name === 'AuthRetryableFetchError';
+}
+
 const ProfileScreen = ({ navigation }: any) => {
   const [loading, setLoading]       = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -179,22 +185,47 @@ const ProfileScreen = ({ navigation }: any) => {
     }
   }, []);
 
+  const showCardLoadFailure = useCallback(() => {
+    cardLoadSeq.current += 1;
+    setCardLoadFailed(true);
+    setCardLoading(false);
+  }, []);
+
   const fetchData = useCallback(async () => {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
-    setUserEmail(user.email || '');
-    setAccountMeta(user.user_metadata || null);
-    setMemberSince(format(new Date(user.created_at), 'MMMM yyyy'));
-    const { data: prof } = await supabase.from('profiles').select('*').eq('user_id', user.id).single();
-    setProfile(prof);
-    const { data: bks } = await supabase.from('bookings').select('*').eq('client_user_id', user.id).order('scheduled_date', { ascending: true });
-    setBookings(bks || []);
-    const pending = (bks || []).filter((b: any) => b.status === 'pending_client');
-    setPendingShifts(pending);
-    setLoading(false);
-    setRefreshing(false);
-    await loadSavedCard();
-  }, [loadSavedCard]);
+    try {
+      const { data: { user }, error } = await supabase.auth.getUser();
+      // Offline getUser returns { user: null, error: AuthRetryableFetchError } and does not
+      // clear the session. Treat that as a card-load failure instead of bailing out.
+      if (isNetworkFailure(error) || isAuthRetryableFetchError(error)) {
+        showCardLoadFailure();
+        return;
+      }
+      if (!user) return;
+      setUserEmail(user.email || '');
+      setAccountMeta(user.user_metadata || null);
+      setMemberSince(format(new Date(user.created_at), 'MMMM yyyy'));
+      const { data: prof, error: profileError } = await supabase.from('profiles').select('*').eq('user_id', user.id).single();
+      if (profileError && isNetworkFailure(profileError)) {
+        showCardLoadFailure();
+        return;
+      }
+      setProfile(prof);
+      const { data: bks, error: bookingsError } = await supabase.from('bookings').select('*').eq('client_user_id', user.id).order('scheduled_date', { ascending: true });
+      if (bookingsError && isNetworkFailure(bookingsError)) {
+        showCardLoadFailure();
+        return;
+      }
+      setBookings(bks || []);
+      const pending = (bks || []).filter((b: any) => b.status === 'pending_client');
+      setPendingShifts(pending);
+      await loadSavedCard();
+    } catch (err: unknown) {
+      if (isNetworkFailure(err) || isAuthRetryableFetchError(err)) showCardLoadFailure();
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, [loadSavedCard, showCardLoadFailure]);
 
   useEffect(() => {
     fetchData();
@@ -304,8 +335,8 @@ const ProfileScreen = ({ navigation }: any) => {
     try {
       await approveBookingStatus(shift.id);
       Alert.alert('Booking approved');
-    } catch (err: any) {
-      Alert.alert('Error', err?.message || 'Could not approve shift');
+    } catch (err: unknown) {
+      Alert.alert('Error', friendlyAlertMessage(err, 'Could not approve shift'));
     } finally {
       setUpdating(null);
       fetchData();
