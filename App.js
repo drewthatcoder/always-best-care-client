@@ -8,6 +8,7 @@ import * as Device from 'expo-device';
 import Constants from 'expo-constants';
 import { ActivityIndicator, Alert, AppState, Platform, View } from 'react-native';
 import { supabase } from './supabase';
+import { clearRecoveryPending, isRecoveryPending } from './recoveryPending';
 import LoginScreen from './screens/LoginScreen';
 import ResetPasswordScreen from './screens/ResetPasswordScreen';
 import HomeScreen from './screens/HomeScreen';
@@ -235,8 +236,31 @@ export default function App() {
       }
     };
 
-    supabase.auth.getSession().then(({ data }) => {
+    supabase.auth.getSession().then(async ({ data }) => {
       if (!active) return;
+      let recoveryPending = false;
+      try {
+        recoveryPending = await isRecoveryPending();
+      } catch (err) {
+        console.warn('Could not read password recovery flag', err);
+      }
+      if (recoveryPending) {
+        try {
+          await supabase.auth.signOut();
+        } catch (err) {
+          console.warn('Could not end password recovery session', err);
+        }
+        try {
+          const { data: after } = await supabase.auth.getSession();
+          if (!after.session) await clearRecoveryPending();
+        } catch (err) {
+          console.warn('Could not clear password recovery flag', err);
+        }
+        if (!active) return;
+        setInitialRoute('Login');
+        setSessionReady(true);
+        return;
+      }
       if (data.session?.user?.id) {
         setInitialRoute('Main');
         startForUser(data.session.user.id);

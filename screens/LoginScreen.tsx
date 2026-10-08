@@ -94,7 +94,12 @@ const LoginScreen = ({ navigation }: any) => {
             </TouchableOpacity>
           </View>
 
-          <TouchableOpacity onPress={() => navigation.navigate('ResetPassword')} style={s.forgotBtn}>
+          <TouchableOpacity
+            onPress={() => navigation.navigate('ResetPassword')}
+            style={s.forgotBtn}
+            hitSlop={{ top: 4, bottom: 4, left: 8, right: 8 }}
+            accessibilityRole="button"
+          >
             <Text style={s.forgot}>Forgot password?</Text>
           </TouchableOpacity>
 
@@ -125,7 +130,7 @@ const s = StyleSheet.create({
   label:        { fontSize: 14, fontWeight: '500', color: COLORS.text, marginBottom: 6 },
   input:        { backgroundColor: COLORS.surface, borderRadius: 10, padding: 14, fontSize: 16, color: COLORS.text, marginBottom: 16, borderWidth: 1, borderColor: COLORS.border },
   passWrap:     { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.surface, borderRadius: 10, paddingHorizontal: 14, borderWidth: 1, borderColor: COLORS.border, marginBottom: 8 },
-  forgotBtn:    { alignSelf: 'flex-end', marginBottom: 20 },
+  forgotBtn:    { alignSelf: 'flex-end', minHeight: 48, justifyContent: 'center', marginBottom: 0, paddingLeft: 8 },
   forgot:       { fontSize: 14, color: COLORS.primary, fontWeight: '600' },
   passInput:    { flex: 1, fontSize: 16, color: COLORS.text, paddingVertical: 14 },
   eyeBtn:       { padding: 8 },

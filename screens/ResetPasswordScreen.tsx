@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -14,7 +14,8 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import BrandLogo from '../components/BrandLogo';
 import { supabase } from '../supabase';
-import { errorText, friendlyAlertMessage } from '../userFacingError';
+import { CONNECTION_MESSAGE, isNetworkFailure } from '../userFacingError';
+import { clearRecoveryPending, setRecoveryPending } from '../recoveryPending';
 
 const COLORS = {
   primary: '#3D52A0',
@@ -26,18 +27,25 @@ const COLORS = {
   white: '#FFFFFF',
 };
 
-const SENT_MESSAGE = 'If an account exists for that email, we sent a reset code. Enter the code and a new password. It may take a minute to arrive.';
+const SENT_MESSAGE = 'If an account exists for that email, we sent a reset code.';
+const OTP_MESSAGE = 'That code is wrong or expired. Request a new one.';
+const PASSWORD_UNCHANGED = 'The password was not changed. Try again.';
 
 function looksLikeEmail(value: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 }
 
-/** Missing-account responses must look the same as a sent email. */
-function hidesAccountExistence(error: unknown): boolean {
-  if (!error || typeof error !== 'object') return false;
-  const code = 'code' in error ? String((error as { code: unknown }).code) : '';
-  if (code === 'user_not_found' || code === 'email_not_found') return true;
-  return /user not found|email not found/i.test(errorText(error));
+/** A request that never left the device. Server 429/5xx stay on the neutral path. */
+function isOfflineFailure(error: unknown): boolean {
+  if (error && typeof error === 'object' && 'status' in error) {
+    const status = (error as { status: unknown }).status;
+    if (typeof status === 'number' && status > 0) return false;
+  }
+  if (error && typeof error === 'object' && 'name' in error) {
+    const name = String((error as { name: unknown }).name);
+    if (name === 'AuthRetryableFetchError') return true;
+  }
+  return isNetworkFailure(error);
 }
 
 const ResetPasswordScreen = ({ navigation }: any) => {
@@ -50,6 +58,39 @@ const ResetPasswordScreen = ({ navigation }: any) => {
   const [verified, setVerified] = useState(false);
   const [sending, setSending] = useState(false);
   const [saving, setSaving] = useState(false);
+  const pendingRef = useRef(false);
+
+  const leavingRef = useRef(false);
+
+  const releaseRecovery = useCallback(async () => {
+    pendingRef.current = false;
+    try {
+      await supabase.auth.signOut();
+    } catch {
+      pendingRef.current = true;
+    }
+    try {
+      const { data } = await supabase.auth.getSession();
+      if (data.session) {
+        pendingRef.current = true;
+        return;
+      }
+      await clearRecoveryPending();
+    } catch {
+      pendingRef.current = true;
+    }
+  }, []);
+
+  useEffect(() => {
+    const sub = navigation.addListener('beforeRemove', (e: { preventDefault: () => void; data: { action: unknown } }) => {
+      if (leavingRef.current || !pendingRef.current) return;
+      e.preventDefault();
+      leavingRef.current = true;
+      const action = e.data.action;
+      releaseRecovery().finally(() => navigation.dispatch(action));
+    });
+    return sub;
+  }, [navigation, releaseRecovery]);
 
   const sendCode = async () => {
     const cleanEmail = email.trim().toLowerCase();
@@ -61,28 +102,30 @@ const ResetPasswordScreen = ({ navigation }: any) => {
     setSending(true);
     try {
       const { error } = await supabase.auth.resetPasswordForEmail(cleanEmail);
-      if (error && !hidesAccountExistence(error)) {
-        Alert.alert('Could not send reset email', friendlyAlertMessage(error, 'Something went wrong. Try again.'));
+      if (error && isOfflineFailure(error)) {
+        Alert.alert('Could not send reset email', CONNECTION_MESSAGE);
         return;
       }
-      setCode('');
-      setVerified(false);
-      setCodeSent(true);
-      Alert.alert('Check your email', SENT_MESSAGE);
     } catch (err: unknown) {
-      Alert.alert('Could not send reset email', friendlyAlertMessage(err, 'Something went wrong. Try again.'));
+      if (isOfflineFailure(err)) {
+        Alert.alert('Could not send reset email', CONNECTION_MESSAGE);
+        return;
+      }
     } finally {
       setSending(false);
     }
+    setCode('');
+    setVerified(false);
+    setCodeSent(true);
+    Alert.alert('Check your email', SENT_MESSAGE);
   };
 
-  const backToLogin = async () => {
-    if (verified) await supabase.auth.signOut();
+  const backToLogin = () => {
     navigation.goBack();
   };
 
   const useDifferentEmail = async () => {
-    if (verified) await supabase.auth.signOut();
+    if (pendingRef.current) await releaseRecovery();
     setVerified(false);
     setCode('');
     setPassword('');
@@ -105,28 +148,65 @@ const ResetPasswordScreen = ({ navigation }: any) => {
       return;
     }
     setSaving(true);
+    let codeAccepted = verified;
     try {
-      if (!verified) {
+      if (!codeAccepted) {
+        try {
+          await setRecoveryPending();
+        } catch {
+          Alert.alert('Could not update password', PASSWORD_UNCHANGED);
+          return;
+        }
+        pendingRef.current = true;
         const { error } = await supabase.auth.verifyOtp({
           email,
           token,
           type: 'recovery',
         });
         if (error) {
-          Alert.alert('Could not verify code', friendlyAlertMessage(error, 'That code did not work. Request a new one and try again.'));
+          Alert.alert('Could not verify code', isOfflineFailure(error) ? CONNECTION_MESSAGE : OTP_MESSAGE);
+          await releaseRecovery();
           return;
         }
+        if (leavingRef.current) {
+          await releaseRecovery();
+          return;
+        }
+        codeAccepted = true;
         setVerified(true);
       }
       const { error: updateError } = await supabase.auth.updateUser({ password });
       if (updateError) {
-        Alert.alert('Could not update password', friendlyAlertMessage(updateError, 'The password was not changed. Try again.'));
+        Alert.alert(
+          'Could not update password',
+          isOfflineFailure(updateError) ? CONNECTION_MESSAGE : PASSWORD_UNCHANGED,
+        );
+        return;
+      }
+      if (leavingRef.current) {
+        await releaseRecovery();
+        return;
+      }
+      pendingRef.current = false;
+      try {
+        await clearRecoveryPending();
+      } catch {
+        pendingRef.current = true;
+        Alert.alert('Could not update password', PASSWORD_UNCHANGED);
         return;
       }
       Alert.alert('Password updated', 'You are signed in with your new password.');
       navigation.replace('Main');
     } catch (err: unknown) {
-      Alert.alert('Could not update password', friendlyAlertMessage(err, 'The password was not changed. Try again.'));
+      if (!codeAccepted) {
+        Alert.alert('Could not verify code', isOfflineFailure(err) ? CONNECTION_MESSAGE : OTP_MESSAGE);
+        if (pendingRef.current) await releaseRecovery();
+        return;
+      }
+      Alert.alert(
+        'Could not update password',
+        isOfflineFailure(err) ? CONNECTION_MESSAGE : PASSWORD_UNCHANGED,
+      );
     } finally {
       setSaving(false);
     }
@@ -151,7 +231,7 @@ const ResetPasswordScreen = ({ navigation }: any) => {
           <Text style={s.title}>Reset password</Text>
           <Text style={s.subtitle}>
             {codeSent
-              ? SENT_MESSAGE
+              ? `${SENT_MESSAGE} Enter the code and a new password. It may take a minute to arrive.`
               : 'Enter the email on your account and we will send a reset code.'}
           </Text>
 
