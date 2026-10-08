@@ -90,8 +90,8 @@ const formatCardBrand = (brand: string) => {
 
 const formatCardExpiry = (month: number, year: number) => `${String(month).padStart(2, '0')}/${year}`;
 
-const EditBtn = ({ label, onPress }: { label: string; onPress: () => void }) => (
-  <TouchableOpacity style={s.editBtn} onPress={onPress}>
+const EditBtn = ({ label, onPress, disabled }: { label: string; onPress: () => void; disabled?: boolean }) => (
+  <TouchableOpacity style={[s.editBtn, disabled && s.editBtnDisabled]} onPress={onPress} disabled={disabled}>
     <Text style={s.editBtnText}>✏️  {label}</Text>
   </TouchableOpacity>
 );
@@ -157,6 +157,7 @@ const ProfileScreen = ({ navigation }: any) => {
   const [editAdditionalInfo, setEditAdditionalInfo] = useState('');
   const [statePickerVisible, setStatePickerVisible] = useState(false);
   const [freqPickerVisible, setFreqPickerVisible]   = useState(false);
+  const [profileLoaded, setProfileLoaded] = useState(false);
   const [savedCard, setSavedCard] = useState<SavedCard | null>(null);
   const [cardLoading, setCardLoading] = useState(true);
   const [cardLoadFailed, setCardLoadFailed] = useState(false);
@@ -218,6 +219,7 @@ const ProfileScreen = ({ navigation }: any) => {
       setBookings(bks || []);
       const pending = (bks || []).filter((b: any) => b.status === 'pending_client');
       setPendingShifts(pending);
+      setProfileLoaded(true);
       await loadSavedCard();
     } catch (err: unknown) {
       if (isNetworkFailure(err) || isAuthRetryableFetchError(err)) showCardLoadFailure();
@@ -384,6 +386,7 @@ const ProfileScreen = ({ navigation }: any) => {
   };
 
   const openEdit = (section: string) => {
+    if (!profileLoaded) return;
     if (section === 'profile') { setEditPhone(clientPhone); setEditDob(clientDob); setEditHeight(clientHeight); setEditWeight(clientWeight); }
     else if (section === 'address') { setEditAddress(clientAddress); setEditAddress2(clientAddress2); setEditCity(clientCity); setEditState(clientState); setEditZip(clientZip); }
     else if (section === 'responsible') { setEditCareFor(careFor); setEditRespEmail(respEmail); setEditRespName(respName); }
@@ -629,21 +632,21 @@ const ProfileScreen = ({ navigation }: any) => {
           <InfoRow icon="⚖️" label="Weight" value={clientWeight} />
           <InfoRow icon="📍" label="Zip Code" value={clientZip} />
           <InfoRow icon="🕐" label="Member Since" value={memberSince} />
-          <EditBtn label="Edit Profile" onPress={() => openEdit('profile')} />
+          <EditBtn label="Edit Profile" onPress={() => openEdit('profile')} disabled={!profileLoaded} />
 
           <SectionCard title="(Address) Patients Location where services are provided Address" icon="🏠">
             <InfoRow icon="📍" label="Street Address" value={clientAddress} />
             <InfoRow icon="📍" label="City" value={clientCity} />
             <InfoRow icon="📍" label="State" value={clientState} />
             <InfoRow icon="📍" label="Zip Code" value={clientZip} />
-            <EditBtn label="Edit Address" onPress={() => openEdit('address')} />
+            <EditBtn label="Edit Address" onPress={() => openEdit('address')} disabled={!profileLoaded} />
           </SectionCard>
 
           <SectionCard title="Responsible Party" icon="👥">
             <InfoRow icon="👤" label="Requesting Care For" value={careFor === 'myself' ? 'Myself' : 'Someone Else'} />
             <InfoRow icon="✉️" label="Responsible Party Email" value={respEmail} />
             {respName ? <InfoRow icon="👤" label="Responsible Party Name" value={respName} /> : null}
-            <EditBtn label="Edit Responsible Party" onPress={() => openEdit('responsible')} />
+            <EditBtn label="Edit Responsible Party" onPress={() => openEdit('responsible')} disabled={!profileLoaded} />
           </SectionCard>
 
           <SectionCard title="Services" icon="❤️">
@@ -658,24 +661,24 @@ const ProfileScreen = ({ navigation }: any) => {
                 <Text style={s.pricingSummaryHint}>First 2 services: $55 each · 3rd service and beyond: $45 each</Text>
               </View>
             )}
-            <EditBtn label="Edit Services" onPress={() => openEdit('services')} />
+            <EditBtn label="Edit Services" onPress={() => openEdit('services')} disabled={!profileLoaded} />
           </SectionCard>
 
           <SectionCard title="Available Hours" icon="🕐">
             {hourLabel ? <Tag label={hourLabel} /> : <Text style={s.emptyText}>Not set</Text>}
-            <EditBtn label="Edit Available Hours" onPress={() => openEdit('hours')} />
+            <EditBtn label="Edit Available Hours" onPress={() => openEdit('hours')} disabled={!profileLoaded} />
           </SectionCard>
 
           <SectionCard title="Scheduled Dates" icon="📅">
             {scheduledDates.length > 0 ? scheduledDates.map((d: string, i: number) => (
               <InfoRow key={i} icon="📅" label="" value={format(new Date(d + 'T00:00:00'), 'MMMM d, yyyy')} />
             )) : <Text style={s.emptyText}>No dates scheduled</Text>}
-            <EditBtn label="Edit Dates" onPress={() => navigation.navigate('Booking')} />
+            <EditBtn label="Edit Dates" onPress={() => navigation.navigate('Booking')} disabled={!profileLoaded} />
           </SectionCard>
 
           <SectionCard title="Recurring Schedule" icon="🔄">
             <InfoRow icon="📅" label="Frequency" value={frequency} />
-            <EditBtn label="Edit Schedule" onPress={() => openEdit('schedule')} />
+            <EditBtn label="Edit Schedule" onPress={() => openEdit('schedule')} disabled={!profileLoaded} />
           </SectionCard>
 
           <SectionCard title="Payment Information" icon="💳">
@@ -694,11 +697,11 @@ const ProfileScreen = ({ navigation }: any) => {
             {savedCard && cardLoadFailed ? <Text style={s.emptyText}>{CARD_LOAD_FAILURE_MESSAGE}</Text> : null}
             {cardLoadFailed ? (
               <TouchableOpacity
-                style={[s.editBtn, (cardBusy || cardLoading) && s.editBtnDisabled]}
-                onPress={loadSavedCard}
-                disabled={cardBusy || cardLoading}
+                style={[s.editBtn, (cardBusy || cardLoading || refreshing) && s.editBtnDisabled]}
+                onPress={onRefresh}
+                disabled={cardBusy || cardLoading || refreshing}
               >
-                <Text style={s.editBtnText}>{cardLoading ? 'Loading...' : 'Retry'}</Text>
+                <Text style={s.editBtnText}>{cardLoading || refreshing ? 'Loading...' : 'Retry'}</Text>
               </TouchableOpacity>
             ) : (
               <TouchableOpacity
@@ -715,7 +718,7 @@ const ProfileScreen = ({ navigation }: any) => {
 
           <SectionCard title="Additional Information" icon="📄">
             <Text style={s.emptyText}>{additionalInfo}</Text>
-            <EditBtn label="Edit Info" onPress={() => openEdit('info')} />
+            <EditBtn label="Edit Info" onPress={() => openEdit('info')} disabled={!profileLoaded} />
           </SectionCard>
 
           <TouchableOpacity style={s.signOutBtn} onPress={handleSignOut}>
