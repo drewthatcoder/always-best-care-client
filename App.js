@@ -29,6 +29,36 @@ const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
 const navigationRef = createNavigationContainerRef();
 
+/** One cold-launch check. Sign-out runs before any caller treats the session as signed in. */
+let recoveryLaunchGate = null;
+function resolveRecoveryLaunch() {
+  if (!recoveryLaunchGate) {
+    recoveryLaunchGate = (async () => {
+      let pending = false;
+      try {
+        pending = await isRecoveryPending();
+      } catch (err) {
+        console.warn('Could not read password recovery flag', err);
+        return false;
+      }
+      if (!pending) return false;
+      try {
+        await supabase.auth.signOut();
+      } catch (err) {
+        console.warn('Could not end password recovery session', err);
+      }
+      try {
+        const { data: after } = await supabase.auth.getSession();
+        if (!after.session) await clearRecoveryPending();
+      } catch (err) {
+        console.warn('Could not clear password recovery flag', err);
+      }
+      return true;
+    })();
+  }
+  return recoveryLaunchGate;
+}
+
 async function registerForPushNotifications() {
   if (!Device.isDevice) return null;
 
@@ -76,6 +106,7 @@ export default function App() {
     // Register for push notifications
     registerForPushNotifications().then(async token => {
       if (!token) return;
+      if (await resolveRecoveryLaunch()) return;
       try {
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) return;
@@ -236,47 +267,49 @@ export default function App() {
       }
     };
 
-    supabase.auth.getSession().then(async ({ data }) => {
-      if (!active) return;
-      let recoveryPending = false;
-      try {
-        recoveryPending = await isRecoveryPending();
-      } catch (err) {
-        console.warn('Could not read password recovery flag', err);
-      }
-      if (recoveryPending) {
-        try {
-          await supabase.auth.signOut();
-        } catch (err) {
-          console.warn('Could not end password recovery session', err);
-        }
-        try {
-          const { data: after } = await supabase.auth.getSession();
-          if (!after.session) await clearRecoveryPending();
-        } catch (err) {
-          console.warn('Could not clear password recovery flag', err);
-        }
+    let authEventsReady = false;
+    const { data: authSub } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!authEventsReady) return;
+      const userId = session?.user?.id || null;
+      setTimeout(() => {
         if (!active) return;
+        if (!userId) {
+          stop();
+          return;
+        }
+        isRecoveryPending().then((stillPending) => {
+          if (!active || stillPending) return;
+          startForUser(userId);
+        }).catch(() => {
+          if (active) startForUser(userId);
+        });
+      }, 0);
+    });
+
+    resolveRecoveryLaunch().then(async (pending) => {
+      if (!active) return;
+      if (pending) {
+        authEventsReady = true;
         setInitialRoute('Login');
         setSessionReady(true);
         return;
       }
-      if (data.session?.user?.id) {
-        setInitialRoute('Main');
-        startForUser(data.session.user.id);
-      }
-      setSessionReady(true);
-    }).catch(() => {
-      if (active) setSessionReady(true);
-    });
-
-    const { data: authSub } = supabase.auth.onAuthStateChange((_event, session) => {
-      const userId = session?.user?.id || null;
-      setTimeout(() => {
+      authEventsReady = true;
+      try {
+        const { data } = await supabase.auth.getSession();
         if (!active) return;
-        if (userId) startForUser(userId);
-        else stop();
-      }, 0);
+        if (data.session?.user?.id) {
+          setInitialRoute('Main');
+          startForUser(data.session.user.id);
+        }
+      } catch (err) {
+        console.warn('Could not read session', err);
+      }
+      if (active) setSessionReady(true);
+    }).catch(() => {
+      if (!active) return;
+      authEventsReady = true;
+      setSessionReady(true);
     });
 
     const appStateSub = AppState.addEventListener('change', (nextState) => {
