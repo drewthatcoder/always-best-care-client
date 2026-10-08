@@ -9,6 +9,7 @@ import Constants from 'expo-constants';
 import { ActivityIndicator, Alert, AppState, Platform, View } from 'react-native';
 import { supabase } from './supabase';
 import LoginScreen from './screens/LoginScreen';
+import ResetPasswordScreen from './screens/ResetPasswordScreen';
 import HomeScreen from './screens/HomeScreen';
 import BookingScreen from './screens/BookingScreen';
 import ProfileScreen from './screens/ProfileScreen';
@@ -279,6 +280,7 @@ export default function App() {
       <NavigationContainer ref={navigationRef}>
         <Stack.Navigator initialRouteName={initialRoute}>
           <Stack.Screen name="Login" component={LoginScreen} options={{ headerShown: false }} />
+          <Stack.Screen name="ResetPassword" component={ResetPasswordScreen} options={{ headerShown: false }} />
           <Stack.Screen name="SignUp" component={SignUpScreen} options={{ headerShown: false }} />
           <Stack.Screen name="Main" component={TabNavigator} options={{ headerShown: false }} />
           <Stack.Screen name="Notifications" component={NotificationsScreen} options={{ headerShown: false }} />

@@ -94,6 +94,10 @@ const LoginScreen = ({ navigation }: any) => {
             </TouchableOpacity>
           </View>
 
+          <TouchableOpacity onPress={() => navigation.navigate('ResetPassword')} style={s.forgotBtn}>
+            <Text style={s.forgot}>Forgot password?</Text>
+          </TouchableOpacity>
+
           <TouchableOpacity style={s.loginBtn} onPress={handleLogin} disabled={loading}>
             {loading
               ? <ActivityIndicator color={COLORS.white} />
@@ -120,7 +124,9 @@ const s = StyleSheet.create({
   subtitle:     { fontSize: 14, color: COLORS.textMuted, textAlign: 'center', marginBottom: 28 },
   label:        { fontSize: 14, fontWeight: '500', color: COLORS.text, marginBottom: 6 },
   input:        { backgroundColor: COLORS.surface, borderRadius: 10, padding: 14, fontSize: 16, color: COLORS.text, marginBottom: 16, borderWidth: 1, borderColor: COLORS.border },
-  passWrap:     { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.surface, borderRadius: 10, paddingHorizontal: 14, borderWidth: 1, borderColor: COLORS.border, marginBottom: 24 },
+  passWrap:     { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.surface, borderRadius: 10, paddingHorizontal: 14, borderWidth: 1, borderColor: COLORS.border, marginBottom: 8 },
+  forgotBtn:    { alignSelf: 'flex-end', marginBottom: 20 },
+  forgot:       { fontSize: 14, color: COLORS.primary, fontWeight: '600' },
   passInput:    { flex: 1, fontSize: 16, color: COLORS.text, paddingVertical: 14 },
   eyeBtn:       { padding: 8 },
   eyeIcon:      { fontSize: 18 },
