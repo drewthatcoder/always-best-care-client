@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 import { format } from 'date-fns';
 import { useFocusEffect } from '@react-navigation/native';
+import BrandLogo from '../components/BrandLogo';
 import { supabase } from '../supabase';
 
 // ── Colours ───────────────────────────────────────────────────────────────────
@@ -170,6 +171,10 @@ const HomeScreen = ({ navigation }: any) => {
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={COLORS.primary} />}
         contentContainerStyle={s.scroll}
       >
+        <View style={s.brandBar}>
+          <BrandLogo width={150} />
+        </View>
+
         {/* Header */}
         <View style={s.header}>
           <View>
@@ -293,7 +298,7 @@ const s = StyleSheet.create({
   safe:             { flex: 1, backgroundColor: COLORS.background },
   scroll:           { paddingBottom: 40 },
 
-  // Header
+  brandBar:         { backgroundColor: COLORS.white, alignItems: 'center', paddingTop: 12, paddingBottom: 12 },
   header:           { backgroundColor: COLORS.gradient1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingTop: 24, paddingBottom: 24 },
   greeting:         { fontSize: 26, fontWeight: '700', color: COLORS.white },
   subGreeting:      { fontSize: 15, color: 'rgba(255,255,255,0.75)', marginTop: 3 },

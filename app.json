@@ -2,7 +2,7 @@
   "expo": {
     "name": "Always Best Care",
     "slug": "always-best-care",
-    "version": "1.0.1",
+    "version": "1.0.2",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -18,17 +18,38 @@
       ],
       "expo-notifications",
       "@react-native-community/datetimepicker",
-      "expo-status-bar"
+      "expo-status-bar",
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#ffffff",
+          "resizeMode": "contain",
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 240,
+          "ios": {
+            "image": "./assets/splash-icon.png",
+            "resizeMode": "contain",
+            "backgroundColor": "#ffffff",
+            "imageWidth": 240
+          },
+          "android": {
+            "image": "./assets/splash-mark.png",
+            "resizeMode": "contain",
+            "backgroundColor": "#ffffff",
+            "imageWidth": 120
+          }
+        }
+      ]
     ],
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
-      "backgroundColor": "#1a237e"
+      "backgroundColor": "#ffffff"
     },
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.cityoftreestech.alwaysbestcare",
-      "buildNumber": "7",
+      "buildNumber": "8",
       "infoPlist": {
         "NSCameraUsageDescription": "Used for profile photos",
         "NSPhotoLibraryUsageDescription": "Used for profile photos",
@@ -37,10 +58,10 @@
     },
     "android": {
       "package": "com.cityoftreestech.alwaysbestcare",
-      "versionCode": 5,
+      "versionCode": 6,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#1a237e"
+        "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
       "permissions": [

@@ -6,7 +6,8 @@
     "start": "expo start",
     "android": "expo start --android",
     "ios": "expo start --ios",
-    "web": "expo start --web"
+    "web": "expo start --web",
+    "generate:brand": "node scripts/generate-brand-assets.mjs"
   },
   "dependencies": {
     "@expo/config-plugins": "^57.0.9",
@@ -22,6 +23,7 @@
     "expo-constants": "~57.0.17",
     "expo-device": "~57.0.1",
     "expo-notifications": "~57.0.17",
+    "expo-splash-screen": "~57.0.9",
     "expo-status-bar": "~57.0.1",
     "react": "19.2.3",
     "react-native": "0.86.3",
@@ -31,6 +33,9 @@
   },
   "private": true,
   "devDependencies": {
-    "@types/react": "~19.2.4"
+    "@resvg/resvg-js": "^2.6.2",
+    "@types/react": "~19.2.4",
+    "pngjs": "^7.0.0",
+    "typescript": "^7.0.2"
   }
 }
