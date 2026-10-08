@@ -27,6 +27,7 @@ import {
   subWeeks,
 } from 'date-fns';
 import { supabase } from '../supabase';
+import { CONFIRM_FAILURE_MESSAGE, friendlyAlertMessage, isDuplicateKey, isNetworkFailure } from '../userFacingError';
 
 const COLORS = {
   primary:      'hsl(231, 41%, 48%)',
@@ -80,31 +81,91 @@ const showTransportationNotice = () => {
   );
 };
 
+const CONFIRM_TIMEOUT_MS = 15000;
+
 const extractZip = (value?: string | null): string => {
   const match = (value || '').match(/\b(\d{5})(?:-\d{4})?\b/);
   return match ? match[1] : '';
 };
 
-const resolveClientZip = async (userId: string): Promise<string> => {
-  const { data: profiles, error } = await supabase
-    .from('profiles')
-    .select('zip_code, updated_at, created_at')
-    .eq('user_id', userId)
-    .order('updated_at', { ascending: false, nullsFirst: false })
-    .order('created_at', { ascending: false, nullsFirst: false });
+const newBookingId = (): string => {
+  const cryptoObj = globalThis.crypto;
+  if (cryptoObj?.randomUUID) return cryptoObj.randomUUID();
+  const bytes = new Uint8Array(16);
+  if (cryptoObj?.getRandomValues) cryptoObj.getRandomValues(bytes);
+  else {
+    for (let i = 0; i < bytes.length; i += 1) bytes[i] = Math.floor(Math.random() * 256);
+  }
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+};
 
-  if (error) console.warn('Profile zip lookup failed', error);
+const abortError = () => {
+  const error = new Error('The request timed out.');
+  error.name = 'AbortError';
+  return error;
+};
+
+const startConfirmTimeout = () => {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), CONFIRM_TIMEOUT_MS);
+  return { signal: controller.signal, cancel: () => clearTimeout(timer) };
+};
+
+const withSignal = <T,>(work: PromiseLike<T>, signal: AbortSignal): Promise<T> => {
+  if (signal.aborted) return Promise.reject(abortError());
+  return new Promise((resolve, reject) => {
+    const onAbort = () => reject(abortError());
+    signal.addEventListener('abort', onAbort);
+    work.then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(value);
+      },
+      (err) => {
+        signal.removeEventListener('abort', onAbort);
+        reject(err);
+      }
+    );
+  });
+};
+
+const confirmFailureMessage = (error: unknown) => (
+  isNetworkFailure(error) ? CONFIRM_FAILURE_MESSAGE : friendlyAlertMessage(error, 'The booking was not saved. Please try again.')
+);
+
+const resolveClientZip = async (userId: string, signal: AbortSignal): Promise<string> => {
+  const { data: profiles, error } = await withSignal(
+    supabase
+      .from('profiles')
+      .select('zip_code, updated_at, created_at')
+      .eq('user_id', userId)
+      .order('updated_at', { ascending: false, nullsFirst: false })
+      .order('created_at', { ascending: false, nullsFirst: false })
+      .abortSignal(signal),
+    signal
+  );
+
+  if (error) throw error;
 
   for (const row of profiles || []) {
     const zip = extractZip(row.zip_code);
     if (zip) return zip;
   }
 
-  const { data: prior } = await supabase
-    .from('bookings')
-    .select('client_zip_code, client_address')
-    .eq('client_user_id', userId)
-    .order('scheduled_date', { ascending: false });
+  const { data: prior, error: priorError } = await withSignal(
+    supabase
+      .from('bookings')
+      .select('client_zip_code, client_address')
+      .eq('client_user_id', userId)
+      .order('scheduled_date', { ascending: false })
+      .abortSignal(signal),
+    signal
+  );
+
+  if (priorError) throw priorError;
 
   for (const row of prior || []) {
     const zip = extractZip(row.client_zip_code) || extractZip(row.client_address);
@@ -193,6 +254,7 @@ const BookingScreen = () => {
   const [zipDraft, setZipDraft] = useState('');
   const [savingBooking, setSavingBooking] = useState(false);
   const savingRef = useRef(false);
+  const confirmAttemptRef = useRef<{ id: string; key: string } | null>(null);
 
   const today = new Date();
 
@@ -235,6 +297,8 @@ const BookingScreen = () => {
   }, [fetchBookings]);
 
   const handleAddBooking = async (date: Date) => {
+    const sameAttempt = newBookingDate && isSameDay(newBookingDate, date);
+    if (!sameAttempt) confirmAttemptRef.current = null;
     setNewBookingDate(date);
     setSelectedServices([]);
     setSelectedHour('');
@@ -242,8 +306,23 @@ const BookingScreen = () => {
     setPickerVisible(false);
   };
 
-  const createBooking = async (userId: string, zip: string) => {
-    if (!newBookingDate || savingRef.current) return;
+  const finishConfirmedBooking = () => {
+    confirmAttemptRef.current = null;
+    setZipModalVisible(false);
+    setZipDraft('');
+    setServicePickerVisible(false);
+    if (newBookingDate) setSelectedDate(newBookingDate);
+    setNewBookingDate(null);
+    setSelectedServices([]);
+    setSelectedHour('');
+    fetchBookings();
+  };
+
+  const createBooking = async (userId: string, zip: string, signal: AbortSignal) => {
+    if (!newBookingDate) {
+      Alert.alert('Could not confirm booking', 'Choose a date and try again.');
+      return;
+    }
     const hourBlock = HOURS.find(h => h.id === selectedHour);
     const cleanZip = extractZip(zip);
     if (!hourBlock || !cleanZip) {
@@ -253,33 +332,34 @@ const BookingScreen = () => {
       return;
     }
 
-    savingRef.current = true;
-    setSavingBooking(true);
-    const { error } = await supabase.from('bookings').insert({
-      client_user_id: userId,
-      scheduled_date: format(newBookingDate, 'yyyy-MM-dd'),
-      start_time: hourBlock.start,
-      end_time: hourBlock.end,
-      service: selectedServices.join(', '),
-      status: 'upcoming',
-      client_zip_code: cleanZip,
-    } as any);
-    savingRef.current = false;
-    setSavingBooking(false);
-
-    if (error) {
-      Alert.alert('Error', 'Could not create booking');
-      return;
+    const attemptKey = `${format(newBookingDate, 'yyyy-MM-dd')}|${selectedHour}|${[...selectedServices].sort().join(',')}`;
+    if (!confirmAttemptRef.current || confirmAttemptRef.current.key !== attemptKey) {
+      confirmAttemptRef.current = { id: newBookingId(), key: attemptKey };
     }
 
-    setZipModalVisible(false);
-    setZipDraft('');
-    setServicePickerVisible(false);
-    setSelectedDate(newBookingDate);
-    setNewBookingDate(null);
-    setSelectedServices([]);
-    setSelectedHour('');
-    fetchBookings();
+    const { error } = await withSignal(
+      supabase.from('bookings').insert({
+        id: confirmAttemptRef.current.id,
+        client_user_id: userId,
+        scheduled_date: format(newBookingDate, 'yyyy-MM-dd'),
+        start_time: hourBlock.start,
+        end_time: hourBlock.end,
+        service: selectedServices.join(', '),
+        status: 'upcoming',
+        client_zip_code: cleanZip,
+      } as any).abortSignal(signal),
+      signal
+    );
+
+    if (error) {
+      if (isDuplicateKey(error)) {
+        finishConfirmedBooking();
+        return;
+      }
+      throw error;
+    }
+
+    finishConfirmedBooking();
   };
 
   const handleConfirmBooking = async () => {
@@ -288,17 +368,32 @@ const BookingScreen = () => {
     if (!selectedHour) { Alert.alert('Please select your preferred hours'); return; }
     if (savingRef.current) return;
 
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) { Alert.alert('Not logged in'); return; }
+    const timeout = startConfirmTimeout();
+    savingRef.current = true;
+    setSavingBooking(true);
+    try {
+      const { data, error } = await withSignal(supabase.auth.getSession(), timeout.signal);
+      if (error || !data.session?.user) {
+        if (isNetworkFailure(error)) throw error ?? abortError();
+        Alert.alert('Could not confirm booking', 'You are not signed in. Log in and try again.');
+        return;
+      }
 
-    const zip = await resolveClientZip(user.id);
-    if (!zip) {
-      setZipDraft('');
-      setServicePickerVisible(false);
-      setZipModalVisible(true);
-      return;
+      const zip = await resolveClientZip(data.session.user.id, timeout.signal);
+      if (!zip) {
+        setZipDraft('');
+        setServicePickerVisible(false);
+        setZipModalVisible(true);
+        return;
+      }
+      await createBooking(data.session.user.id, zip, timeout.signal);
+    } catch (err: unknown) {
+      Alert.alert(confirmFailureMessage(err));
+    } finally {
+      timeout.cancel();
+      savingRef.current = false;
+      setSavingBooking(false);
     }
-    await createBooking(user.id, zip);
   };
 
   const handleSubmitZip = async () => {
@@ -307,10 +402,35 @@ const BookingScreen = () => {
       Alert.alert('Zip code required', 'Enter the 5-digit zip code for the address where care will be provided.');
       return;
     }
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) { Alert.alert('Not logged in'); return; }
-    await supabase.from('profiles').update({ zip_code: zip } as any).eq('user_id', user.id);
-    await createBooking(user.id, zip);
+    if (savingRef.current) return;
+
+    const timeout = startConfirmTimeout();
+    savingRef.current = true;
+    setSavingBooking(true);
+    try {
+      const { data, error } = await withSignal(supabase.auth.getSession(), timeout.signal);
+      if (error || !data.session?.user) {
+        if (isNetworkFailure(error)) throw error ?? abortError();
+        Alert.alert('Could not confirm booking', 'You are not signed in. Log in and try again.');
+        return;
+      }
+      const { error: profileError } = await withSignal(
+        supabase
+          .from('profiles')
+          .update({ zip_code: zip } as any)
+          .eq('user_id', data.session.user.id)
+          .abortSignal(timeout.signal),
+        timeout.signal
+      );
+      if (profileError) throw profileError;
+      await createBooking(data.session.user.id, zip, timeout.signal);
+    } catch (err: unknown) {
+      Alert.alert(confirmFailureMessage(err));
+    } finally {
+      timeout.cancel();
+      savingRef.current = false;
+      setSavingBooking(false);
+    }
   };
 
   const handleApprove = async (shift: Booking) => {
@@ -363,8 +483,8 @@ const BookingScreen = () => {
         .from('bookings').update({ status: 'approved' } as any).eq('id', shift.id);
 
       if (error) Alert.alert('Error', 'Could not approve shift');
-    } catch (err: any) {
-      Alert.alert('Error', err.message || 'Something went wrong');
+    } catch (err: unknown) {
+      Alert.alert('Error', friendlyAlertMessage(err, 'Something went wrong'));
     }
     setUpdating(null);
     fetchBookings();
@@ -387,7 +507,7 @@ const BookingScreen = () => {
     try {
       const { data, error } = await supabase.rpc('client_request_call', { p_booking_id: shift.id });
       if (error) {
-        showRequestCallError(error.message || 'Something went wrong.');
+        showRequestCallError(friendlyAlertMessage(error, 'Something went wrong.'));
         return;
       }
       const created = Number(data);
@@ -403,7 +523,7 @@ const BookingScreen = () => {
       setAltSlots(getAltTimeSlots(shift));
       setAltTime('');
     } catch (err: any) {
-      showRequestCallError(err?.message || 'Something went wrong.');
+      showRequestCallError(friendlyAlertMessage(err, 'Something went wrong.'));
     } finally {
       setRequestingCallId(null);
     }
@@ -501,7 +621,7 @@ const BookingScreen = () => {
       <Text style={[s.bookingStatus, b.status === 'approved' && { color: COLORS.success }, b.status === 'pending_client' && { color: COLORS.danger }, b.status === 'cancelled' && s.cancelledMark]}>
         {bookingStatusLabel(b.status)}
       </Text>
-      {b.provider_user_id ? <AgencyCallButton /> : null}
+      {b.provider_user_id && b.status !== 'cancelled' ? <AgencyCallButton /> : null}
       {canClientCancel(b.status) ? (
         <TouchableOpacity
           style={s.cancelBookingBtn}
