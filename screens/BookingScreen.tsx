@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -9,6 +9,8 @@ import {
   ActivityIndicator,
   Alert,
   SafeAreaView,
+  Linking,
+  TextInput,
 } from 'react-native';
 import {
   format,
@@ -61,6 +63,63 @@ const HOURS = [
 ];
 
 const calcTotal = (count: number) => count <= 2 ? count * 55 : 2 * 55 + (count - 2) * 45;
+
+const AGENCY_PHONE_DISPLAY = '(916) 884-1983';
+const AGENCY_PHONE_TEL = 'tel:9168841983';
+
+const callAgency = () => {
+  Linking.openURL(AGENCY_PHONE_TEL).catch(() => {
+    Alert.alert('Agency phone', AGENCY_PHONE_DISPLAY);
+  });
+};
+
+const showTransportationNotice = () => {
+  Alert.alert(
+    'Transportation',
+    `Please call the agency at ${AGENCY_PHONE_DISPLAY} to discuss how much time you need and the destination address.`
+  );
+};
+
+const extractZip = (value?: string | null): string => {
+  const match = (value || '').match(/\b(\d{5})(?:-\d{4})?\b/);
+  return match ? match[1] : '';
+};
+
+const resolveClientZip = async (userId: string): Promise<string> => {
+  const { data: profiles, error } = await supabase
+    .from('profiles')
+    .select('zip_code, updated_at, created_at')
+    .eq('user_id', userId)
+    .order('updated_at', { ascending: false, nullsFirst: false })
+    .order('created_at', { ascending: false, nullsFirst: false });
+
+  if (error) console.warn('Profile zip lookup failed', error);
+
+  for (const row of profiles || []) {
+    const zip = extractZip(row.zip_code);
+    if (zip) return zip;
+  }
+
+  const { data: prior } = await supabase
+    .from('bookings')
+    .select('client_zip_code, client_address')
+    .eq('client_user_id', userId)
+    .order('scheduled_date', { ascending: false });
+
+  for (const row of prior || []) {
+    const zip = extractZip(row.client_zip_code) || extractZip(row.client_address);
+    if (zip) return zip;
+  }
+  return '';
+};
+
+const canClientCancel = (status: string) => status === 'upcoming' || status === 'pending_client';
+
+const AgencyCallButton = () => (
+  <TouchableOpacity style={s.callBtn} onPress={callAgency} accessibilityRole="link">
+    <Text style={s.callBtnText}>📞 Call {AGENCY_PHONE_DISPLAY}</Text>
+  </TouchableOpacity>
+);
 
 interface Booking {
   id: string;
@@ -118,6 +177,7 @@ const BookingScreen = () => {
   const [bookings, setBookings]               = useState<Booking[]>([]);
   const [loading, setLoading]                 = useState(true);
   const [updating, setUpdating]               = useState<string | null>(null);
+  const [requestingCallId, setRequestingCallId] = useState<string | null>(null);
   const [pickerVisible, setPickerVisible]     = useState(false);
   const [pickerMonth, setPickerMonth]         = useState(new Date());
   const [providerNames, setProviderNames]     = useState<Record<string, string>>({});
@@ -129,6 +189,10 @@ const BookingScreen = () => {
   const [selectedServices, setSelectedServices]   = useState<string[]>([]);
   const [selectedHour, setSelectedHour]           = useState('');
   const [servicePickerVisible, setServicePickerVisible] = useState(false);
+  const [zipModalVisible, setZipModalVisible] = useState(false);
+  const [zipDraft, setZipDraft] = useState('');
+  const [savingBooking, setSavingBooking] = useState(false);
+  const savingRef = useRef(false);
 
   const today = new Date();
 
@@ -178,43 +242,75 @@ const BookingScreen = () => {
     setPickerVisible(false);
   };
 
-  const handleConfirmBooking = async () => {
-    if (!newBookingDate) return;
-    if (selectedServices.length === 0) { Alert.alert('Please select at least one service'); return; }
-    if (!selectedHour) { Alert.alert('Please select your preferred hours'); return; }
-
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) { Alert.alert('Not logged in'); return; }
-
+  const createBooking = async (userId: string, zip: string) => {
+    if (!newBookingDate || savingRef.current) return;
     const hourBlock = HOURS.find(h => h.id === selectedHour);
-    if (!hourBlock) return;
+    const cleanZip = extractZip(zip);
+    if (!hourBlock || !cleanZip) {
+      setZipDraft(zip || '');
+      setZipModalVisible(true);
+      Alert.alert('Zip code required', 'Enter the 5-digit zip code for the address where care will be provided before booking.');
+      return;
+    }
 
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('zip_code')
-      .eq('user_id', user.id)
-      .single();
-
+    savingRef.current = true;
+    setSavingBooking(true);
     const { error } = await supabase.from('bookings').insert({
-      client_user_id: user.id,
+      client_user_id: userId,
       scheduled_date: format(newBookingDate, 'yyyy-MM-dd'),
       start_time: hourBlock.start,
       end_time: hourBlock.end,
       service: selectedServices.join(', '),
       status: 'upcoming',
-      client_zip_code: profile?.zip_code || null,
+      client_zip_code: cleanZip,
     } as any);
+    savingRef.current = false;
+    setSavingBooking(false);
 
     if (error) {
       Alert.alert('Error', 'Could not create booking');
-    } else {
-      setServicePickerVisible(false);
-      setSelectedDate(newBookingDate);
-      setNewBookingDate(null);
-      setSelectedServices([]);
-      setSelectedHour('');
-      fetchBookings();
+      return;
     }
+
+    setZipModalVisible(false);
+    setZipDraft('');
+    setServicePickerVisible(false);
+    setSelectedDate(newBookingDate);
+    setNewBookingDate(null);
+    setSelectedServices([]);
+    setSelectedHour('');
+    fetchBookings();
+  };
+
+  const handleConfirmBooking = async () => {
+    if (!newBookingDate) return;
+    if (selectedServices.length === 0) { Alert.alert('Please select at least one service'); return; }
+    if (!selectedHour) { Alert.alert('Please select your preferred hours'); return; }
+    if (savingRef.current) return;
+
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) { Alert.alert('Not logged in'); return; }
+
+    const zip = await resolveClientZip(user.id);
+    if (!zip) {
+      setZipDraft('');
+      setServicePickerVisible(false);
+      setZipModalVisible(true);
+      return;
+    }
+    await createBooking(user.id, zip);
+  };
+
+  const handleSubmitZip = async () => {
+    const zip = extractZip(zipDraft);
+    if (!zip) {
+      Alert.alert('Zip code required', 'Enter the 5-digit zip code for the address where care will be provided.');
+      return;
+    }
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) { Alert.alert('Not logged in'); return; }
+    await supabase.from('profiles').update({ zip_code: zip } as any).eq('user_id', user.id);
+    await createBooking(user.id, zip);
   };
 
   const handleApprove = async (shift: Booking) => {
@@ -266,13 +362,6 @@ const BookingScreen = () => {
       const { error } = await supabase
         .from('bookings').update({ status: 'approved' } as any).eq('id', shift.id);
 
-      if (!error && shift.provider_user_id) {
-        await supabase.from('notifications').insert({
-          user_id: shift.provider_user_id,
-          title: '✅ Client Approved Your Shift',
-          body: `The ${shift.service} shift on ${format(new Date(shift.scheduled_date + 'T00:00:00'), 'MMM dd, yyyy')} has been approved!`,
-        });
-      }
       if (error) Alert.alert('Error', 'Could not approve shift');
     } catch (err: any) {
       Alert.alert('Error', err.message || 'Something went wrong');
@@ -281,18 +370,42 @@ const BookingScreen = () => {
     fetchBookings();
   };
 
+  const showRequestCallError = (message: string) => {
+    Alert.alert(
+      'Could not notify your provider',
+      `${message}\n\nCall the agency at ${AGENCY_PHONE_DISPLAY}.`,
+      [
+        { text: 'Call agency', onPress: callAgency },
+        { text: 'OK', style: 'cancel' },
+      ]
+    );
+  };
+
   const handleDecline = async (shift: Booking) => {
-    setDecliningId(shift.id);
-    setAltSlots(getAltTimeSlots(shift));
-    setAltTime('');
-    if (shift.provider_user_id) {
-      const phone = shift.client_phone || 'phone number on file';
-      await supabase.from('notifications').insert({
-        user_id: shift.provider_user_id,
-        title: '📞 Client Requests a Call',
-        body: `The client declined the ${shift.service} shift on ${format(new Date(shift.scheduled_date + 'T00:00:00'), 'MMM dd, yyyy')}. Please call them at ${phone}.`,
-      });
-      Alert.alert('Provider notified', 'The provider has been asked to call you.');
+    if (requestingCallId) return;
+    setRequestingCallId(shift.id);
+    try {
+      const { data, error } = await supabase.rpc('client_request_call', { p_booking_id: shift.id });
+      if (error) {
+        showRequestCallError(error.message || 'Something went wrong.');
+        return;
+      }
+      const created = Number(data);
+      if (created > 0) {
+        Alert.alert("Provider notified. They'll call you soon.");
+      } else if (created === 0) {
+        Alert.alert("We already let your provider know. They'll call you soon.");
+      } else {
+        showRequestCallError('Something went wrong.');
+        return;
+      }
+      setDecliningId(shift.id);
+      setAltSlots(getAltTimeSlots(shift));
+      setAltTime('');
+    } catch (err: any) {
+      showRequestCallError(err?.message || 'Something went wrong.');
+    } finally {
+      setRequestingCallId(null);
     }
   };
 
@@ -304,13 +417,6 @@ const BookingScreen = () => {
       .from('bookings')
       .update({ start_time: newStart, end_time: newEnd, status: 'upcoming', provider_user_id: null, provider_viewed: false } as any)
       .eq('id', shift.id);
-    if (!error && shift.provider_user_id) {
-      await supabase.from('notifications').insert({
-        user_id: shift.provider_user_id,
-        title: '🔄 Client Requested a Different Time',
-        body: `Client prefers ${altTime} for the ${shift.service} shift on ${format(new Date(shift.scheduled_date + 'T00:00:00'), 'MMM dd, yyyy')}.`,
-      });
-    }
     if (error) Alert.alert('Error', 'Could not send alternative time');
     setUpdating(null); setDecliningId(null); setAltTime('');
     fetchBookings();
@@ -336,11 +442,82 @@ const BookingScreen = () => {
 
   const pendingShifts = bookings.filter(b => b.status === 'pending_client');
 
+  const handleCancelBooking = (booking: Booking) => {
+    if (!canClientCancel(booking.status)) return;
+    Alert.alert(
+      'Cancel booking',
+      'This will cancel your booking. The agency will be notified.',
+      [
+        { text: 'Keep booking', style: 'cancel' },
+        {
+          text: 'Cancel booking',
+          style: 'destructive',
+          onPress: async () => {
+            setUpdating(booking.id);
+            const { data: { user } } = await supabase.auth.getUser();
+            if (!user) { setUpdating(null); return; }
+            const { data, error } = await supabase
+              .from('bookings')
+              .update({ status: 'cancelled' } as any)
+              .eq('id', booking.id)
+              .eq('client_user_id', user.id)
+              .in('status', ['upcoming', 'pending_client'])
+              .select('id');
+            setUpdating(null);
+            if (error || !data || data.length !== 1) {
+              console.warn('Cancel booking did not update a row', { id: booking.id, error, updated: data?.length ?? 0 });
+              Alert.alert('Error', 'Could not cancel booking');
+            } else {
+              fetchBookings();
+            }
+          },
+        },
+      ]
+    );
+  };
+
   const toggleService = (id: string) => {
+    const adding = !selectedServices.includes(id);
+    if (adding && id === 'transport') showTransportationNotice();
     setSelectedServices(prev =>
       prev.includes(id) ? prev.filter(s => s !== id) : [...prev, id]
     );
   };
+
+  const bookingStatusLabel = (status: string) => {
+    if (status === 'approved') return '✅ Approved';
+    if (status === 'pending_client') return '⏳ Needs Approval';
+    if (status === 'cancelled') return 'Cancelled';
+    return status;
+  };
+
+  const renderBookingSummary = (b: Booking, showFullDate = false) => (
+    <View key={b.id} style={[s.bookingCard, b.status === 'cancelled' && s.bookingCardCancelled]}>
+      <Text style={[s.bookingService, b.status === 'cancelled' && s.bookingCancelledText]}>{b.service}</Text>
+      <Text style={s.bookingTime}>
+        {showFullDate ? `${format(new Date(b.scheduled_date + 'T00:00:00'), 'MMM d, yyyy')} · ` : ''}
+        {b.start_time} – {b.end_time}
+      </Text>
+      <Text style={[s.bookingStatus, b.status === 'approved' && { color: COLORS.success }, b.status === 'pending_client' && { color: COLORS.danger }, b.status === 'cancelled' && s.cancelledMark]}>
+        {bookingStatusLabel(b.status)}
+      </Text>
+      {b.provider_user_id ? <AgencyCallButton /> : null}
+      {canClientCancel(b.status) ? (
+        <TouchableOpacity
+          style={s.cancelBookingBtn}
+          onPress={() => handleCancelBooking(b)}
+          disabled={updating === b.id}
+        >
+          <Text style={s.cancelBookingText}>{updating === b.id ? 'Cancelling...' : 'Cancel booking'}</Text>
+        </TouchableOpacity>
+      ) : null}
+      {b.status === 'approved' ? (
+        <TouchableOpacity onPress={callAgency} accessibilityRole="link">
+          <Text style={s.approvedCancelText}>To cancel an approved booking, call the agency at {AGENCY_PHONE_DISPLAY}</Text>
+        </TouchableOpacity>
+      ) : null}
+    </View>
+  );
 
   const serviceCount = selectedServices.length;
   const totalPrice = calcTotal(serviceCount);
@@ -371,13 +548,14 @@ const BookingScreen = () => {
                   {shift.provider_user_id && providerNames[shift.provider_user_id] && (
                     <Text style={s.shiftDetail}>👤 {providerNames[shift.provider_user_id]}</Text>
                   )}
+                  {shift.provider_user_id ? <AgencyCallButton /> : null}
                   {!isDeclining ? (
                     <View style={s.shiftActions}>
                       <TouchableOpacity style={[s.actionBtn, s.approveBtn]} onPress={() => handleApprove(shift)} disabled={updating === shift.id}>
                         <Text style={s.actionBtnText}>{updating === shift.id ? 'Approving...' : '✅ Approve'}</Text>
                       </TouchableOpacity>
-                      <TouchableOpacity style={[s.actionBtn, s.declineBtn]} onPress={() => handleDecline(shift)} disabled={updating === shift.id}>
-                        <Text style={s.actionBtnText}>📞 Decline, Call Me</Text>
+                      <TouchableOpacity style={[s.actionBtn, s.declineBtn]} onPress={() => handleDecline(shift)} disabled={updating === shift.id || requestingCallId === shift.id}>
+                        <Text style={s.actionBtnText}>{requestingCallId === shift.id ? 'Notifying...' : '📞 Decline, Call Me'}</Text>
                       </TouchableOpacity>
                     </View>
                   ) : (
@@ -396,6 +574,15 @@ const BookingScreen = () => {
                       </View>
                     </View>
                   )}
+                  {canClientCancel(shift.status) ? (
+                    <TouchableOpacity
+                      style={s.cancelBookingBtn}
+                      onPress={() => handleCancelBooking(shift)}
+                      disabled={updating === shift.id}
+                    >
+                      <Text style={s.cancelBookingText}>{updating === shift.id ? 'Cancelling...' : 'Cancel booking'}</Text>
+                    </TouchableOpacity>
+                  ) : null}
                 </View>
               );
             })}
@@ -436,8 +623,10 @@ const BookingScreen = () => {
                   {dayBooks.length > 0 && (
                     <View>
                       {dayBooks.slice(0, 2).map(b => (
-                        <View key={b.id} style={[s.dayBadge, b.status === 'pending_client' && s.dayBadgePending, b.status === 'approved' && s.dayBadgeApproved]}>
-                          <Text style={s.dayBadgeText} numberOfLines={1}>{b.service.split(',')[0]}</Text>
+                        <View key={b.id} style={[s.dayBadge, b.status === 'pending_client' && s.dayBadgePending, b.status === 'approved' && s.dayBadgeApproved, b.status === 'cancelled' && s.dayBadgeCancelled]}>
+                          <Text style={[s.dayBadgeText, b.status === 'cancelled' && s.dayBadgeCancelledText]} numberOfLines={1}>
+                            {b.status === 'cancelled' ? 'Cancelled' : b.service.split(',')[0]}
+                          </Text>
                         </View>
                       ))}
                       {dayBooks.length > 2 && <Text style={s.moreText}>+{dayBooks.length - 2}</Text>}
@@ -462,15 +651,7 @@ const BookingScreen = () => {
             <View style={s.selectedSection}>
               <Text style={s.selectedLabel}>{format(selectedDate, 'EEEE, MMMM d, yyyy')}</Text>
               {getBookingsForDate(selectedDate).length > 0 ? (
-                getBookingsForDate(selectedDate).map(b => (
-                  <View key={b.id} style={s.bookingCard}>
-                    <Text style={s.bookingService}>{b.service}</Text>
-                    <Text style={s.bookingTime}>{b.start_time} – {b.end_time}</Text>
-                    <Text style={[s.bookingStatus, b.status === 'approved' && { color: COLORS.success }, b.status === 'pending_client' && { color: COLORS.danger }]}>
-                      {b.status === 'approved' ? '✅ Approved' : b.status === 'pending_client' ? '⏳ Needs Approval' : b.status}
-                    </Text>
-                  </View>
-                ))
+                getBookingsForDate(selectedDate).map(b => renderBookingSummary(b))
               ) : (
                 <Text style={s.noBookings}>No bookings for this date.</Text>
               )}
@@ -480,15 +661,7 @@ const BookingScreen = () => {
           {bookings.length > 0 && (
             <View style={s.upcomingSection}>
               <Text style={s.upcomingTitle}>All Bookings</Text>
-              {[...bookings].sort((a, b) => a.scheduled_date.localeCompare(b.scheduled_date)).map(b => (
-                <View key={b.id} style={s.bookingCard}>
-                  <Text style={s.bookingService}>{b.service}</Text>
-                  <Text style={s.bookingTime}>{format(new Date(b.scheduled_date + 'T00:00:00'), 'MMM d, yyyy')} · {b.start_time} – {b.end_time}</Text>
-                  <Text style={[s.bookingStatus, b.status === 'approved' && { color: COLORS.success }, b.status === 'pending_client' && { color: COLORS.danger }]}>
-                    {b.status === 'approved' ? '✅ Approved' : b.status === 'pending_client' ? '⏳ Needs Approval' : b.status}
-                  </Text>
-                </View>
-              ))}
+              {[...bookings].sort((a, b) => a.scheduled_date.localeCompare(b.scheduled_date)).map(b => renderBookingSummary(b, true))}
             </View>
           )}
         </View>
@@ -569,11 +742,39 @@ const BookingScreen = () => {
                 <TouchableOpacity style={s.cancelServiceBtn} onPress={() => setServicePickerVisible(false)}>
                   <Text style={s.cancelServiceBtnText}>Cancel</Text>
                 </TouchableOpacity>
-                <TouchableOpacity style={[s.confirmServiceBtn, (serviceCount === 0 || !selectedHour) && { opacity: 0.4 }]} onPress={handleConfirmBooking} disabled={serviceCount === 0 || !selectedHour}>
-                  <Text style={s.confirmServiceBtnText}>Confirm Booking</Text>
+                <TouchableOpacity style={[s.confirmServiceBtn, (serviceCount === 0 || !selectedHour || savingBooking) && { opacity: 0.4 }]} onPress={handleConfirmBooking} disabled={serviceCount === 0 || !selectedHour || savingBooking}>
+                  <Text style={s.confirmServiceBtnText}>{savingBooking ? 'Saving...' : 'Confirm Booking'}</Text>
                 </TouchableOpacity>
               </View>
             </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={zipModalVisible} transparent animationType="fade">
+        <View style={s.overlay}>
+          <View style={s.pickerCard}>
+            <Text style={s.pickerTitle}>Zip code required</Text>
+            <Text style={s.altTimeHint}>
+              Enter the zip code for the address where care will be provided. Providers only see bookings in their zip codes.
+            </Text>
+            <TextInput
+              style={s.zipInput}
+              value={zipDraft}
+              onChangeText={setZipDraft}
+              keyboardType="number-pad"
+              maxLength={10}
+              placeholder="95814"
+              placeholderTextColor={COLORS.textMuted}
+            />
+            <View style={s.shiftActions}>
+              <TouchableOpacity style={[s.actionBtn, s.cancelBtn]} onPress={() => { setZipModalVisible(false); setServicePickerVisible(true); }} disabled={savingBooking}>
+                <Text style={{ color: COLORS.text, fontWeight: '600' }}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[s.actionBtn, s.approveBtn]} onPress={handleSubmitZip} disabled={savingBooking}>
+                <Text style={s.actionBtnText}>{savingBooking ? 'Saving...' : 'Continue'}</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         </View>
       </Modal>
@@ -648,7 +849,9 @@ const s = StyleSheet.create({
   dayBadge:         { backgroundColor: COLORS.primaryLight, borderRadius: 3, paddingHorizontal: 3, paddingVertical: 1, marginBottom: 2 },
   dayBadgePending:  { backgroundColor: COLORS.dangerLight },
   dayBadgeApproved: { backgroundColor: COLORS.successLight },
+  dayBadgeCancelled:{ backgroundColor: '#F3F4F6' },
   dayBadgeText:     { fontSize: 9, color: COLORS.primary, fontWeight: '600' },
+  dayBadgeCancelledText: { color: COLORS.textMuted, textDecorationLine: 'line-through' },
   moreText:         { fontSize: 9, color: COLORS.textMuted },
   sidebar:          { paddingTop: 4 },
   sidebarTitle:     { fontSize: 18, fontWeight: '700', color: COLORS.text, marginBottom: 4 },
@@ -659,9 +862,18 @@ const s = StyleSheet.create({
   selectedLabel:    { fontSize: 14, fontWeight: '600', color: COLORS.text, marginBottom: 8 },
   noBookings:       { fontSize: 13, color: COLORS.textMuted },
   bookingCard:      { backgroundColor: COLORS.surface, borderRadius: 8, padding: 12, marginBottom: 8 },
+  bookingCardCancelled: { backgroundColor: '#F3F4F6', borderWidth: 1, borderColor: COLORS.border },
   bookingService:   { fontSize: 14, fontWeight: '600', color: COLORS.text },
+  bookingCancelledText: { color: COLORS.textMuted, textDecorationLine: 'line-through' },
   bookingTime:      { fontSize: 12, color: COLORS.textMuted, marginTop: 2 },
   bookingStatus:    { fontSize: 12, fontWeight: '600', marginTop: 4, color: COLORS.textMuted },
+  cancelledMark:    { color: COLORS.danger, fontWeight: '700' },
+  approvedCancelText: { marginTop: 8, color: COLORS.primary, fontWeight: '600', fontSize: 13 },
+  callBtn:          { marginTop: 8, alignSelf: 'flex-start', backgroundColor: COLORS.primaryLight, borderRadius: 8, paddingVertical: 8, paddingHorizontal: 12 },
+  callBtnText:      { color: COLORS.primary, fontWeight: '700', fontSize: 13 },
+  cancelBookingBtn: { marginTop: 8, alignSelf: 'flex-start', paddingVertical: 4 },
+  cancelBookingText:{ color: COLORS.danger, fontWeight: '700', fontSize: 13 },
+  zipInput:         { borderWidth: 1, borderColor: COLORS.border, borderRadius: 8, padding: 12, marginTop: 8, marginBottom: 4, fontSize: 16, color: COLORS.text },
   upcomingSection:  { borderTopWidth: 1, borderTopColor: COLORS.border, paddingTop: 14, marginTop: 4 },
   upcomingTitle:    { fontSize: 15, fontWeight: '600', color: COLORS.text, marginBottom: 8 },
   overlay:          { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', alignItems: 'center' },

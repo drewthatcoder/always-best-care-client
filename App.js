@@ -1,12 +1,12 @@
 import { useEffect, useRef } from 'react';
-import { NavigationContainer } from '@react-navigation/native';
+import { NavigationContainer, createNavigationContainerRef } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { StripeProvider } from '@stripe/stripe-react-native';
 import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
 import Constants from 'expo-constants';
-import { Platform } from 'react-native';
+import { Alert, AppState, Platform } from 'react-native';
 import { supabase } from './supabase';
 import LoginScreen from './screens/LoginScreen';
 import HomeScreen from './screens/HomeScreen';
@@ -25,6 +25,7 @@ Notifications.setNotificationHandler({
 
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
+const navigationRef = createNavigationContainerRef();
 
 async function registerForPushNotifications() {
   if (!Device.isDevice) return null;
@@ -70,12 +71,31 @@ export default function App() {
   useEffect(() => {
     // Register for push notifications
     registerForPushNotifications().then(async token => {
-      if (token) {
+      if (!token) return;
+      try {
         const { data: { user } } = await supabase.auth.getUser();
-        if (user) {
-          await supabase.from('profiles').upsert({ user_id: user.id, push_token: token });
+        if (!user) return;
+
+        const { data: updated, error: updateError } = await supabase
+          .from('profiles')
+          .update({ push_token: token })
+          .eq('user_id', user.id)
+          .select('id');
+        if (updateError) {
+          console.warn('Could not update push token', updateError);
+          return;
         }
+        if (updated && updated.length > 0) return;
+
+        const { error: insertError } = await supabase
+          .from('profiles')
+          .insert({ user_id: user.id, push_token: token });
+        if (insertError) console.warn('Could not save push token', insertError);
+      } catch (err) {
+        console.warn('Could not save push token', err);
       }
+    }).catch(err => {
+      console.warn('Could not register for push notifications', err);
     });
 
     // Listen for notifications
@@ -93,9 +113,154 @@ export default function App() {
     };
   }, []);
 
+  useEffect(() => {
+    let active = true;
+    let channel = null;
+    let currentUserId = null;
+    const seen = new Set();
+    const queue = [];
+    let showing = false;
+
+    const markRead = async (id) => {
+      const { data, error } = await supabase
+        .from('notifications')
+        .update({ read: true })
+        .eq('id', id)
+        .select('id');
+      if (error || !data || data.length !== 1) {
+        console.warn('Failed to mark notification read', { id, error, updated: data?.length ?? 0 });
+        seen.delete(id);
+        return false;
+      }
+      return true;
+    };
+
+    const openNotifications = () => {
+      if (navigationRef.isReady()) navigationRef.navigate('Notifications');
+    };
+
+    const pump = () => {
+      if (!active || showing) return;
+      const next = queue.shift();
+      if (!next) return;
+      showing = true;
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        markRead(next.id).finally(() => {
+          showing = false;
+          if (active) pump();
+        });
+      };
+      const more = next.moreCount > 0 ? `\n\nYou have ${next.moreCount} more unread.` : '';
+      const buttons = [{ text: 'OK', onPress: finish }];
+      if (next.moreCount > 0) {
+        buttons.unshift({
+          text: 'View notifications',
+          onPress: () => {
+            finish();
+            openNotifications();
+          },
+        });
+      }
+      Alert.alert(next.title || 'Notification', `${next.body || ''}${more}`, buttons, {
+        cancelable: true,
+        onDismiss: finish,
+      });
+    };
+
+    const presentUnread = (rows) => {
+      const fresh = [];
+      (rows || []).forEach((row) => {
+        if (!row?.id || row.read === true || seen.has(row.id)) return;
+        if (currentUserId && row.user_id && row.user_id !== currentUserId) return;
+        fresh.push(row);
+      });
+      if (!fresh.length) return;
+      fresh.sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
+      fresh.forEach((row) => seen.add(row.id));
+      queue.push({ ...fresh[0], moreCount: fresh.length - 1 });
+      pump();
+    };
+
+    const loadUnread = async (userId) => {
+      const { data } = await supabase
+        .from('notifications')
+        .select('id, title, body, read, user_id, created_at')
+        .eq('user_id', userId)
+        .eq('read', false)
+        .order('created_at', { ascending: false });
+      if (!active || currentUserId !== userId) return;
+      presentUnread(data || []);
+    };
+
+    const subscribe = (userId) => {
+      if (channel) supabase.removeChannel(channel);
+      channel = supabase
+        .channel(`client-unread-notifications-${userId}`)
+        .on(
+          'postgres_changes',
+          {
+            event: 'INSERT',
+            schema: 'public',
+            table: 'notifications',
+            filter: `user_id=eq.${userId}`,
+          },
+          (payload) => {
+            if (payload.new) presentUnread([payload.new]);
+          }
+        )
+        .subscribe();
+    };
+
+    const startForUser = (userId) => {
+      if (!userId || !active) return;
+      if (currentUserId !== userId) {
+        currentUserId = userId;
+        subscribe(userId);
+      }
+      loadUnread(userId);
+    };
+
+    const stop = () => {
+      currentUserId = null;
+      queue.length = 0;
+      if (channel) {
+        supabase.removeChannel(channel);
+        channel = null;
+      }
+    };
+
+    supabase.auth.getSession().then(({ data }) => {
+      if (!active) return;
+      if (data.session?.user?.id) startForUser(data.session.user.id);
+    });
+
+    const { data: authSub } = supabase.auth.onAuthStateChange((_event, session) => {
+      const userId = session?.user?.id || null;
+      setTimeout(() => {
+        if (!active) return;
+        if (userId) startForUser(userId);
+        else stop();
+      }, 0);
+    });
+
+    const appStateSub = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active' && currentUserId) loadUnread(currentUserId);
+    });
+
+    return () => {
+      active = false;
+      appStateSub.remove();
+      authSub.subscription.unsubscribe();
+      if (channel) supabase.removeChannel(channel);
+    };
+  }, []);
+
   return (
     <StripeProvider publishableKey="pk_live_51TBfSlCv6ZSrYUtDHAxWCTQdDrNg8MEyS0CRNYbonrSqN84RWLFEWmYBNyeAPlagZ6NinoGNATZ74Nxtvy2CIxBk00RoTcRDf9">
-      <NavigationContainer>
+      <NavigationContainer ref={navigationRef}>
         <Stack.Navigator initialRouteName="Login">
           <Stack.Screen name="Login" component={LoginScreen} options={{ headerShown: false }} />
           <Stack.Screen name="SignUp" component={SignUpScreen} options={{ headerShown: false }} />

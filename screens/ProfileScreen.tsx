@@ -11,6 +11,7 @@ import {
   ActivityIndicator,
   Modal,
   RefreshControl,
+  Linking,
 } from 'react-native';
 import { format } from 'date-fns';
 import { supabase } from '../supabase';
@@ -106,6 +107,7 @@ const ProfileScreen = ({ navigation }: any) => {
   const [loading, setLoading]       = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [updating, setUpdating]     = useState<string | null>(null);
+  const [requestingCallId, setRequestingCallId] = useState<string | null>(null);
   const [userEmail, setUserEmail]   = useState('');
   const [memberSince, setMemberSince] = useState('');
   const [profile, setProfile] = useState<any>(null);
@@ -186,29 +188,49 @@ const ProfileScreen = ({ navigation }: any) => {
   const handleApprove = async (shift: PendingShift) => {
     setUpdating(shift.id);
     const { error } = await supabase.from('bookings').update({ status: 'approved' } as any).eq('id', shift.id);
-    if (!error && shift.provider_user_id) {
-      await supabase.from('notifications').insert({
-        user_id: shift.provider_user_id,
-        title: '✅ Client Approved Your Shift',
-        body: `The ${shift.service} shift on ${format(new Date(shift.scheduled_date + 'T00:00:00'), 'MMM dd, yyyy')} (${shift.start_time} – ${shift.end_time}) has been approved!`,
-      });
-    }
     if (error) Alert.alert('Error', 'Could not approve shift');
     setUpdating(null);
     fetchData();
   };
 
+  const showRequestCallError = (message: string) => {
+    Alert.alert(
+      'Could not notify your provider',
+      `${message}\n\nCall the agency at (916) 884-1983.`,
+      [
+        {
+          text: 'Call agency',
+          onPress: () => Linking.openURL('tel:9168841983').catch(() => Alert.alert('Agency phone', '(916) 884-1983')),
+        },
+        { text: 'OK', style: 'cancel' },
+      ]
+    );
+  };
+
   const handleDecline = async (shift: PendingShift) => {
-    if (shift.provider_user_id) {
-      const phone = shift.client_phone || 'phone number on file';
-      await supabase.from('notifications').insert({
-        user_id: shift.provider_user_id,
-        title: '📞 Client Requests a Call',
-        body: `The client declined the ${shift.service} shift on ${format(new Date(shift.scheduled_date + 'T00:00:00'), 'MMM dd, yyyy')}. Please call them at ${phone}.`,
-      });
-      Alert.alert('Provider notified', 'The provider has been asked to call you.');
+    if (requestingCallId) return;
+    setRequestingCallId(shift.id);
+    try {
+      const { data, error } = await supabase.rpc('client_request_call', { p_booking_id: shift.id });
+      if (error) {
+        showRequestCallError(error.message || 'Something went wrong.');
+        return;
+      }
+      const created = Number(data);
+      if (created > 0) {
+        Alert.alert("Provider notified. They'll call you soon.");
+      } else if (created === 0) {
+        Alert.alert("We already let your provider know. They'll call you soon.");
+      } else {
+        showRequestCallError('Something went wrong.');
+        return;
+      }
+      fetchData();
+    } catch (err: any) {
+      showRequestCallError(err?.message || 'Something went wrong.');
+    } finally {
+      setRequestingCallId(null);
     }
-    fetchData();
   };
 
   const openEdit = (section: string) => {
@@ -307,12 +329,21 @@ const ProfileScreen = ({ navigation }: any) => {
               <Text style={s.shiftMetaText}>🕐 {shift.start_time} – {shift.end_time}</Text>
               <Text style={s.shiftMetaText}>📋 {shift.service}</Text>
             </View>
+            {shift.provider_user_id ? (
+              <TouchableOpacity
+                style={s.callBtn}
+                onPress={() => Linking.openURL('tel:9168841983').catch(() => Alert.alert('Agency phone', '(916) 884-1983'))}
+                accessibilityRole="link"
+              >
+                <Text style={s.callBtnText}>📞 Call (916) 884-1983</Text>
+              </TouchableOpacity>
+            ) : null}
             <View style={s.shiftActions}>
               <TouchableOpacity style={s.approveBtn} onPress={() => handleApprove(shift)} disabled={updating === shift.id}>
                 <Text style={s.approveBtnText}>{updating === shift.id ? 'Approving...' : '✅ Approve'}</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={s.declineBtn} onPress={() => handleDecline(shift)} disabled={updating === shift.id}>
-                <Text style={s.declineBtnText}>📞 Decline, Please Call me</Text>
+              <TouchableOpacity style={s.declineBtn} onPress={() => handleDecline(shift)} disabled={updating === shift.id || requestingCallId === shift.id}>
+                <Text style={s.declineBtnText}>{requestingCallId === shift.id ? 'Notifying...' : '📞 Decline, Please Call me'}</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -479,7 +510,15 @@ const ProfileScreen = ({ navigation }: any) => {
               {ALL_SERVICES.map(svc => {
                 const sel = editServices.includes(svc.label);
                 return (
-                  <TouchableOpacity key={svc.id} style={[s.serviceRow, sel && s.serviceRowSel]} onPress={() => setEditServices(prev => sel ? prev.filter(x => x !== svc.label) : [...prev, svc.label])}>
+                  <TouchableOpacity key={svc.id} style={[s.serviceRow, sel && s.serviceRowSel]} onPress={() => {
+                    if (!sel && svc.id === 'transport') {
+                      Alert.alert(
+                        'Transportation',
+                        'Please call the agency at (916) 884-1983 to discuss how much time you need and the destination address.'
+                      );
+                    }
+                    setEditServices(prev => sel ? prev.filter(x => x !== svc.label) : [...prev, svc.label]);
+                  }}>
                     <Text style={s.serviceRowEmoji}>{svc.emoji}</Text>
                     <Text style={[s.serviceRowLabel, sel && { color: COLORS.primary, fontWeight: '600' }]}>{svc.label}</Text>
                     {sel && <Text style={{ color: COLORS.primary }}>✓</Text>}
@@ -579,6 +618,8 @@ const s = StyleSheet.create({
   shiftMeta:          { flexDirection: 'row', gap: 16, marginBottom: 12 },
   shiftMetaText:      { fontSize: 13, color: COLORS.textMuted },
   shiftActions:       { flexDirection: 'row', gap: 8 },
+  callBtn:            { alignSelf: 'flex-start', backgroundColor: COLORS.tagBg, borderRadius: 8, paddingVertical: 8, paddingHorizontal: 12, marginBottom: 12 },
+  callBtnText:        { color: COLORS.primary, fontWeight: '700', fontSize: 13 },
   approveBtn:         { flex: 1, backgroundColor: COLORS.primary, borderRadius: 10, paddingVertical: 12, alignItems: 'center' },
   approveBtnText:     { color: COLORS.white, fontWeight: '700', fontSize: 14 },
   declineBtn:         { flex: 1, backgroundColor: COLORS.error, borderRadius: 10, paddingVertical: 12, alignItems: 'center' },
