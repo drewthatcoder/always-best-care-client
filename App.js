@@ -8,7 +8,7 @@ import * as Device from 'expo-device';
 import Constants from 'expo-constants';
 import { ActivityIndicator, Alert, AppState, Platform, View } from 'react-native';
 import { supabase } from './supabase';
-import { clearRecoveryPending, isRecoveryPending } from './recoveryPending';
+import { clearRecoveryPending, isRecoveryPending, setRecoveryReadyHandler } from './recoveryPending';
 import LoginScreen from './screens/LoginScreen';
 import ResetPasswordScreen from './screens/ResetPasswordScreen';
 import HomeScreen from './screens/HomeScreen';
@@ -86,6 +86,41 @@ async function registerForPushNotifications() {
   return token;
 }
 
+let pushSavedFor = null;
+let pushInFlightFor = null;
+function savePushToken(userId) {
+  if (!userId || pushSavedFor === userId || pushInFlightFor === userId) return;
+  pushInFlightFor = userId;
+  registerForPushNotifications().then(async (token) => {
+    if (!token) return;
+    const { data: updated, error: updateError } = await supabase
+      .from('profiles')
+      .update({ push_token: token })
+      .eq('user_id', userId)
+      .select('id');
+    if (updateError) {
+      console.warn('Could not update push token', updateError);
+      return;
+    }
+    if (updated && updated.length > 0) {
+      pushSavedFor = userId;
+      return;
+    }
+    const { error: insertError } = await supabase
+      .from('profiles')
+      .insert({ user_id: userId, push_token: token });
+    if (insertError) {
+      console.warn('Could not save push token', insertError);
+      return;
+    }
+    pushSavedFor = userId;
+  }).catch(err => {
+    console.warn('Could not register for push notifications', err);
+  }).finally(() => {
+    if (pushInFlightFor === userId) pushInFlightFor = null;
+  });
+}
+
 function TabNavigator() {
   return (
     <Tab.Navigator>
@@ -104,31 +139,10 @@ export default function App() {
 
   useEffect(() => {
     // Register for push notifications
-    registerForPushNotifications().then(async token => {
-      if (!token) return;
-      if (await resolveRecoveryLaunch()) return;
-      try {
-        const { data: { user } } = await supabase.auth.getUser();
-        if (!user) return;
-
-        const { data: updated, error: updateError } = await supabase
-          .from('profiles')
-          .update({ push_token: token })
-          .eq('user_id', user.id)
-          .select('id');
-        if (updateError) {
-          console.warn('Could not update push token', updateError);
-          return;
-        }
-        if (updated && updated.length > 0) return;
-
-        const { error: insertError } = await supabase
-          .from('profiles')
-          .insert({ user_id: user.id, push_token: token });
-        if (insertError) console.warn('Could not save push token', insertError);
-      } catch (err) {
-        console.warn('Could not save push token', err);
-      }
+    resolveRecoveryLaunch().then(async (pending) => {
+      if (pending) return;
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) savePushToken(user.id);
     }).catch(err => {
       console.warn('Could not register for push notifications', err);
     });
@@ -250,12 +264,11 @@ export default function App() {
     };
 
     const startForUser = (userId) => {
-      if (!userId || !active) return;
-      if (currentUserId !== userId) {
-        currentUserId = userId;
-        subscribe(userId);
-      }
+      if (!userId || !active || currentUserId === userId) return;
+      currentUserId = userId;
+      subscribe(userId);
       loadUnread(userId);
+      savePushToken(userId);
     };
 
     const stop = () => {
@@ -266,6 +279,11 @@ export default function App() {
         channel = null;
       }
     };
+
+    setRecoveryReadyHandler((userId) => {
+      if (!active) return;
+      startForUser(userId);
+    });
 
     let authEventsReady = false;
     const { data: authSub } = supabase.auth.onAuthStateChange((_event, session) => {
@@ -318,6 +336,7 @@ export default function App() {
 
     return () => {
       active = false;
+      setRecoveryReadyHandler(null);
       appStateSub.remove();
       authSub.subscription.unsubscribe();
       if (channel) supabase.removeChannel(channel);

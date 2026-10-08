@@ -15,7 +15,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import BrandLogo from '../components/BrandLogo';
 import { supabase } from '../supabase';
 import { CONNECTION_MESSAGE, isNetworkFailure } from '../userFacingError';
-import { clearRecoveryPending, setRecoveryPending } from '../recoveryPending';
+import { clearRecoveryPending, notifyRecoveryReady, setRecoveryPending } from '../recoveryPending';
 
 const COLORS = {
   primary: '#3D52A0',
@@ -194,6 +194,13 @@ const ResetPasswordScreen = ({ navigation }: any) => {
         pendingRef.current = true;
         Alert.alert('Could not update password', PASSWORD_UNCHANGED);
         return;
+      }
+      try {
+        const { data } = await supabase.auth.getSession();
+        const userId = data.session?.user?.id;
+        if (userId) notifyRecoveryReady(userId);
+      } catch (err) {
+        console.warn('Could not start signed-in setup after password reset', err);
       }
       Alert.alert('Password updated', 'You are signed in with your new password.');
       navigation.replace('Main');
