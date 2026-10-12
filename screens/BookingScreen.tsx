@@ -64,7 +64,6 @@ const HOURS = [
   { id: 'evening',   label: 'Evenings: 5 pm – 10 pm',  start: '5:00 PM',  end: '10:00 PM' },
 ];
 
-const calcTotal = (count: number) => count <= 2 ? count * 55 : 2 * 55 + (count - 2) * 45;
 
 const AGENCY_PHONE_DISPLAY = '(916) 884-1983';
 const AGENCY_PHONE_TEL = 'tel:9168841983';
@@ -641,7 +640,6 @@ const BookingScreen = () => {
   );
 
   const serviceCount = selectedServices.length;
-  const totalPrice = calcTotal(serviceCount);
 
   return (
     <SafeAreaView style={s.safe}>
@@ -827,7 +825,6 @@ const BookingScreen = () => {
               </Text>
               <Text style={s.servicePickerSubtitle}>Select services and preferred hours</Text>
               <Text style={s.servicePickerSection}>Available Services*</Text>
-              <Text style={s.pricingHint}>1–2 services: $55 each · 3rd+: $45 each</Text>
               <View style={s.servicesGrid}>
                 {SERVICES.map(svc => {
                   const sel = selectedServices.includes(svc.id);
@@ -844,10 +841,8 @@ const BookingScreen = () => {
               </View>
               {serviceCount > 0 && (
                 <View style={s.pricingBox}>
-                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <Text style={s.pricingText}>{serviceCount} service{serviceCount > 1 ? 's' : ''} selected</Text>
-                    <Text style={s.pricingTotal}>${totalPrice}/visit</Text>
-                  </View>
+                  <Text style={s.pricingText}>{serviceCount} service{serviceCount > 1 ? 's' : ''} selected</Text>
+                  <Text style={s.pricingHint}>Pricing set by your provider.</Text>
                 </View>
               )}
               <Text style={[s.servicePickerSection, { marginTop: 20 }]}>Available Hours*</Text>

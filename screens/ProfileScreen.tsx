@@ -61,7 +61,6 @@ const US_STATES = [
   'VA','WA','WV','WI','WY',
 ];
 
-const calcTotal = (count: number) => count <= 2 ? count * 55 : 2 * 55 + (count - 2) * 45;
 
 const InfoRow = ({ icon, label, value }: { icon: string; label: string; value: string }) => (
   <View style={s.infoRow}>
@@ -472,7 +471,6 @@ const ProfileScreen = ({ navigation }: any) => {
   }
 
   const serviceCount = serviceList.length;
-  const totalPerVisit = calcTotal(serviceCount);
 
   return (
     <SafeAreaView style={s.safe}>
@@ -550,9 +548,9 @@ const ProfileScreen = ({ navigation }: any) => {
             {serviceCount > 0 && (
               <View style={s.pricingSummary}>
                 <Text style={s.pricingSummaryTitle}>
-                  {serviceCount} service{serviceCount > 1 ? 's' : ''} selected — <Text style={{ color: COLORS.primary }}>${totalPerVisit}/visit</Text>
+                  {serviceCount} service{serviceCount > 1 ? 's' : ''} selected
                 </Text>
-                <Text style={s.pricingSummaryHint}>First 2 services: $55 each · 3rd service and beyond: $45 each</Text>
+                <Text style={s.pricingSummaryHint}>Pricing set by your provider.</Text>
               </View>
             )}
             <EditBtn label="Edit Services" onPress={() => openEdit('services')} />

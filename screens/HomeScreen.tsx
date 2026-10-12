@@ -261,7 +261,6 @@ const HomeScreen = ({ navigation }: any) => {
         {/* Available services */}
         <View style={s.section}>
           <Text style={s.sectionTitle}>Our Services</Text>
-          <Text style={s.sectionSubtitle}>First 2 services: $55 each · 3rd+: $45 each</Text>
           <View style={s.servicesGrid}>
             {SERVICES.map((svc, i) => (
               <TouchableOpacity
