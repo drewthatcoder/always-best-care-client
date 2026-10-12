@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -15,7 +15,9 @@ import {
 } from 'react-native';
 import { format } from 'date-fns';
 import { supabase } from '../supabase';
-import { friendlyAlertMessage } from '../userFacingError';
+import { approveBookingStatus } from '../approveBooking';
+import { CardSetupCanceled, getPaymentMethod, saveDefaultCard, type SavedCard } from '../payments';
+import { CARD_LOAD_FAILURE_MESSAGE, friendlyAlertMessage, isNetworkFailure, isUndeployedPaymentFunction } from '../userFacingError';
 
 const COLORS = {
   primary:      '#3D52A0',
@@ -73,8 +75,23 @@ const InfoRow = ({ icon, label, value }: { icon: string; label: string; value: s
   </View>
 );
 
-const EditBtn = ({ label, onPress }: { label: string; onPress: () => void }) => (
-  <TouchableOpacity style={s.editBtn} onPress={onPress}>
+const formatCardBrand = (brand: string) => {
+  const known: Record<string, string> = {
+    visa: 'Visa',
+    mastercard: 'Mastercard',
+    amex: 'American Express',
+    discover: 'Discover',
+    diners: 'Diners Club',
+    jcb: 'JCB',
+    unionpay: 'UnionPay',
+  };
+  return known[brand.toLowerCase()] || brand;
+};
+
+const formatCardExpiry = (month: number, year: number) => `${String(month).padStart(2, '0')}/${year}`;
+
+const EditBtn = ({ label, onPress, disabled }: { label: string; onPress: () => void; disabled?: boolean }) => (
+  <TouchableOpacity style={[s.editBtn, disabled && s.editBtnDisabled]} onPress={onPress} disabled={disabled}>
     <Text style={s.editBtnText}>✏️  {label}</Text>
   </TouchableOpacity>
 );
@@ -102,6 +119,12 @@ interface PendingShift {
   status: string;
   provider_user_id: string | null;
   client_phone: string | null;
+}
+
+/** Supabase returns this (user null, session kept) when getUser() cannot reach the network. */
+function isAuthRetryableFetchError(error: unknown): boolean {
+  return !!error && typeof error === 'object' && 'name' in error
+    && (error as { name: unknown }).name === 'AuthRetryableFetchError';
 }
 
 const ProfileScreen = ({ navigation }: any) => {
@@ -134,22 +157,77 @@ const ProfileScreen = ({ navigation }: any) => {
   const [editAdditionalInfo, setEditAdditionalInfo] = useState('');
   const [statePickerVisible, setStatePickerVisible] = useState(false);
   const [freqPickerVisible, setFreqPickerVisible]   = useState(false);
+  const [profileLoaded, setProfileLoaded] = useState(false);
+  const [savedCard, setSavedCard] = useState<SavedCard | null>(null);
+  const [cardLoading, setCardLoading] = useState(true);
+  const [cardLoadFailed, setCardLoadFailed] = useState(false);
+  const [cardBusy, setCardBusy] = useState(false);
+  const cardLoadSeq = useRef(0);
+  const cardFlowRef = useRef(false);
+
+  const loadSavedCard = useCallback(async () => {
+    const seq = ++cardLoadSeq.current;
+    setCardLoading(true);
+    try {
+      const card = await getPaymentMethod();
+      if (seq !== cardLoadSeq.current) return;
+      setSavedCard(card);
+      setCardLoadFailed(false);
+    } catch (err: unknown) {
+      if (seq !== cardLoadSeq.current) return;
+      if (isUndeployedPaymentFunction(err)) {
+        setSavedCard(null);
+        setCardLoadFailed(false);
+      } else {
+        setCardLoadFailed(true);
+      }
+    } finally {
+      if (seq === cardLoadSeq.current) setCardLoading(false);
+    }
+  }, []);
+
+  const showCardLoadFailure = useCallback(() => {
+    cardLoadSeq.current += 1;
+    setCardLoadFailed(true);
+    setCardLoading(false);
+  }, []);
 
   const fetchData = useCallback(async () => {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
-    setUserEmail(user.email || '');
-    setAccountMeta(user.user_metadata || null);
-    setMemberSince(format(new Date(user.created_at), 'MMMM yyyy'));
-    const { data: prof } = await supabase.from('profiles').select('*').eq('user_id', user.id).single();
-    setProfile(prof);
-    const { data: bks } = await supabase.from('bookings').select('*').eq('client_user_id', user.id).order('scheduled_date', { ascending: true });
-    setBookings(bks || []);
-    const pending = (bks || []).filter((b: any) => b.status === 'pending_client');
-    setPendingShifts(pending);
-    setLoading(false);
-    setRefreshing(false);
-  }, []);
+    try {
+      const { data: { user }, error } = await supabase.auth.getUser();
+      // Offline getUser returns { user: null, error: AuthRetryableFetchError } and does not
+      // clear the session. Treat that as a card-load failure instead of bailing out.
+      if (isNetworkFailure(error) || isAuthRetryableFetchError(error)) {
+        showCardLoadFailure();
+        return;
+      }
+      if (!user) return;
+      setUserEmail(user.email || '');
+      setAccountMeta(user.user_metadata || null);
+      setMemberSince(format(new Date(user.created_at), 'MMMM yyyy'));
+      const { data: prof, error: profileError } = await supabase.from('profiles').select('*').eq('user_id', user.id).single();
+      if (profileError && isNetworkFailure(profileError)) {
+        showCardLoadFailure();
+        return;
+      }
+      setProfile(prof);
+      const { data: bks, error: bookingsError } = await supabase.from('bookings').select('*').eq('client_user_id', user.id).order('scheduled_date', { ascending: true });
+      if (bookingsError && isNetworkFailure(bookingsError)) {
+        showCardLoadFailure();
+        return;
+      }
+      setBookings(bks || []);
+      const pending = (bks || []).filter((b: any) => b.status === 'pending_client');
+      setPendingShifts(pending);
+      setProfileLoaded(true);
+      await loadSavedCard();
+    } catch (err: unknown) {
+      if (isNetworkFailure(err) || isAuthRetryableFetchError(err)) showCardLoadFailure();
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, [loadSavedCard, showCardLoadFailure]);
 
   useEffect(() => {
     fetchData();
@@ -232,12 +310,39 @@ const ProfileScreen = ({ navigation }: any) => {
     return true;
   };
 
+  const handleSaveCard = async () => {
+    if (cardFlowRef.current || cardBusy) return;
+    cardFlowRef.current = true;
+    cardLoadSeq.current += 1;
+    setCardLoading(false);
+    setCardBusy(true);
+    try {
+      const card = await saveDefaultCard();
+      setSavedCard(card);
+      setCardLoadFailed(false);
+      setCardLoading(false);
+    } catch (err: any) {
+      if (!(err instanceof CardSetupCanceled)) {
+        Alert.alert('Could not save card', err?.message || 'Something went wrong.');
+      }
+    } finally {
+      cardFlowRef.current = false;
+      setCardBusy(false);
+    }
+  };
+
   const handleApprove = async (shift: PendingShift) => {
+    if (updating) return;
     setUpdating(shift.id);
-    const { error } = await supabase.from('bookings').update({ status: 'approved' } as any).eq('id', shift.id);
-    if (error) Alert.alert('Error', 'Could not approve shift');
-    setUpdating(null);
-    fetchData();
+    try {
+      await approveBookingStatus(shift.id);
+      Alert.alert('Booking approved');
+    } catch (err: unknown) {
+      Alert.alert('Error', friendlyAlertMessage(err, 'Could not approve shift'));
+    } finally {
+      setUpdating(null);
+      fetchData();
+    }
   };
 
   const showRequestCallError = (message: string) => {
@@ -281,6 +386,7 @@ const ProfileScreen = ({ navigation }: any) => {
   };
 
   const openEdit = (section: string) => {
+    if (!profileLoaded) return;
     if (section === 'profile') { setEditPhone(clientPhone); setEditDob(clientDob); setEditHeight(clientHeight); setEditWeight(clientWeight); }
     else if (section === 'address') { setEditAddress(clientAddress); setEditAddress2(clientAddress2); setEditCity(clientCity); setEditState(clientState); setEditZip(clientZip); }
     else if (section === 'responsible') { setEditCareFor(careFor); setEditRespEmail(respEmail); setEditRespName(respName); }
@@ -526,21 +632,21 @@ const ProfileScreen = ({ navigation }: any) => {
           <InfoRow icon="⚖️" label="Weight" value={clientWeight} />
           <InfoRow icon="📍" label="Zip Code" value={clientZip} />
           <InfoRow icon="🕐" label="Member Since" value={memberSince} />
-          <EditBtn label="Edit Profile" onPress={() => openEdit('profile')} />
+          <EditBtn label="Edit Profile" onPress={() => openEdit('profile')} disabled={!profileLoaded} />
 
           <SectionCard title="(Address) Patients Location where services are provided Address" icon="🏠">
             <InfoRow icon="📍" label="Street Address" value={clientAddress} />
             <InfoRow icon="📍" label="City" value={clientCity} />
             <InfoRow icon="📍" label="State" value={clientState} />
             <InfoRow icon="📍" label="Zip Code" value={clientZip} />
-            <EditBtn label="Edit Address" onPress={() => openEdit('address')} />
+            <EditBtn label="Edit Address" onPress={() => openEdit('address')} disabled={!profileLoaded} />
           </SectionCard>
 
           <SectionCard title="Responsible Party" icon="👥">
             <InfoRow icon="👤" label="Requesting Care For" value={careFor === 'myself' ? 'Myself' : 'Someone Else'} />
             <InfoRow icon="✉️" label="Responsible Party Email" value={respEmail} />
             {respName ? <InfoRow icon="👤" label="Responsible Party Name" value={respName} /> : null}
-            <EditBtn label="Edit Responsible Party" onPress={() => openEdit('responsible')} />
+            <EditBtn label="Edit Responsible Party" onPress={() => openEdit('responsible')} disabled={!profileLoaded} />
           </SectionCard>
 
           <SectionCard title="Services" icon="❤️">
@@ -555,34 +661,64 @@ const ProfileScreen = ({ navigation }: any) => {
                 <Text style={s.pricingSummaryHint}>First 2 services: $55 each · 3rd service and beyond: $45 each</Text>
               </View>
             )}
-            <EditBtn label="Edit Services" onPress={() => openEdit('services')} />
+            <EditBtn label="Edit Services" onPress={() => openEdit('services')} disabled={!profileLoaded} />
           </SectionCard>
 
           <SectionCard title="Available Hours" icon="🕐">
             {hourLabel ? <Tag label={hourLabel} /> : <Text style={s.emptyText}>Not set</Text>}
-            <EditBtn label="Edit Available Hours" onPress={() => openEdit('hours')} />
+            <EditBtn label="Edit Available Hours" onPress={() => openEdit('hours')} disabled={!profileLoaded} />
           </SectionCard>
 
           <SectionCard title="Scheduled Dates" icon="📅">
             {scheduledDates.length > 0 ? scheduledDates.map((d: string, i: number) => (
               <InfoRow key={i} icon="📅" label="" value={format(new Date(d + 'T00:00:00'), 'MMMM d, yyyy')} />
             )) : <Text style={s.emptyText}>No dates scheduled</Text>}
-            <EditBtn label="Edit Dates" onPress={() => navigation.navigate('Booking')} />
+            <EditBtn label="Edit Dates" onPress={() => navigation.navigate('Booking')} disabled={!profileLoaded} />
           </SectionCard>
 
           <SectionCard title="Recurring Schedule" icon="🔄">
             <InfoRow icon="📅" label="Frequency" value={frequency} />
-            <EditBtn label="Edit Schedule" onPress={() => openEdit('schedule')} />
+            <EditBtn label="Edit Schedule" onPress={() => openEdit('schedule')} disabled={!profileLoaded} />
           </SectionCard>
 
           <SectionCard title="Payment Information" icon="💳">
-            <Text style={s.emptyText}>Card on file</Text>
-            <EditBtn label="Edit Payment" onPress={() => Alert.alert('Payment', 'Payment editing coming soon.')} />
+            {cardLoading && !savedCard ? (
+              <ActivityIndicator color={COLORS.primary} style={{ marginVertical: 8 }} />
+            ) : savedCard ? (
+              <>
+                <Text style={s.infoValue}>{formatCardBrand(savedCard.brand)} •••• {savedCard.last4}</Text>
+                <Text style={s.emptyText}>Expires {formatCardExpiry(savedCard.expMonth, savedCard.expYear)}</Text>
+              </>
+            ) : cardLoadFailed ? (
+              <Text style={s.emptyText}>{CARD_LOAD_FAILURE_MESSAGE}</Text>
+            ) : (
+              <Text style={s.emptyText}>No card on file</Text>
+            )}
+            {savedCard && cardLoadFailed ? <Text style={s.emptyText}>{CARD_LOAD_FAILURE_MESSAGE}</Text> : null}
+            {cardLoadFailed ? (
+              <TouchableOpacity
+                style={[s.editBtn, (cardBusy || cardLoading || refreshing) && s.editBtnDisabled]}
+                onPress={onRefresh}
+                disabled={cardBusy || cardLoading || refreshing}
+              >
+                <Text style={s.editBtnText}>{cardLoading || refreshing ? 'Loading...' : 'Retry'}</Text>
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity
+                style={[s.editBtn, (cardBusy || cardLoading) && s.editBtnDisabled]}
+                onPress={handleSaveCard}
+                disabled={cardBusy || cardLoading}
+              >
+                <Text style={s.editBtnText}>
+                  {cardBusy ? 'Opening card form...' : savedCard ? '✏️  Update card' : '✏️  Add card'}
+                </Text>
+              </TouchableOpacity>
+            )}
           </SectionCard>
 
           <SectionCard title="Additional Information" icon="📄">
             <Text style={s.emptyText}>{additionalInfo}</Text>
-            <EditBtn label="Edit Info" onPress={() => openEdit('info')} />
+            <EditBtn label="Edit Info" onPress={() => openEdit('info')} disabled={!profileLoaded} />
           </SectionCard>
 
           <TouchableOpacity style={s.signOutBtn} onPress={handleSignOut}>
@@ -799,6 +935,7 @@ const s = StyleSheet.create({
   infoLabel:          { fontSize: 12, color: COLORS.textMuted },
   infoValue:          { fontSize: 15, fontWeight: '600', color: COLORS.text, marginTop: 2 },
   editBtn:            { borderWidth: 1, borderColor: COLORS.border, borderRadius: 12, paddingVertical: 12, alignItems: 'center', marginTop: 8, marginBottom: 4 },
+  editBtnDisabled:    { opacity: 0.6 },
   editBtnText:        { fontSize: 14, color: COLORS.textMuted, fontWeight: '500' },
   sectionCard:        { backgroundColor: COLORS.white, borderRadius: 16, padding: 16, marginBottom: 16, borderWidth: 1, borderColor: COLORS.border },
   sectionHeader:      { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },

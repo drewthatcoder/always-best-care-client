@@ -6,6 +6,7 @@
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
+    "scheme": "alwaysbestcare",
     "newArchEnabled": false,
     "description": "Always Best Care connects clients with trusted home care providers for personalized in-home services.",
     "plugins": [
