@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from 'react';
 import { NavigationContainer, createNavigationContainerRef } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import { StripeProvider } from '@stripe/stripe-react-native';
 import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
 import Constants from 'expo-constants';
@@ -275,15 +274,13 @@ export default function App() {
   }
 
   return (
-    <StripeProvider publishableKey="pk_live_51TBfSlCv6ZSrYUtDHAxWCTQdDrNg8MEyS0CRNYbonrSqN84RWLFEWmYBNyeAPlagZ6NinoGNATZ74Nxtvy2CIxBk00RoTcRDf9">
-      <NavigationContainer ref={navigationRef}>
-        <Stack.Navigator initialRouteName={initialRoute}>
-          <Stack.Screen name="Login" component={LoginScreen} options={{ headerShown: false }} />
-          <Stack.Screen name="SignUp" component={SignUpScreen} options={{ headerShown: false }} />
-          <Stack.Screen name="Main" component={TabNavigator} options={{ headerShown: false }} />
-          <Stack.Screen name="Notifications" component={NotificationsScreen} options={{ headerShown: false }} />
-        </Stack.Navigator>
-      </NavigationContainer>
-    </StripeProvider>
+    <NavigationContainer ref={navigationRef}>
+      <Stack.Navigator initialRouteName={initialRoute}>
+        <Stack.Screen name="Login" component={LoginScreen} options={{ headerShown: false }} />
+        <Stack.Screen name="SignUp" component={SignUpScreen} options={{ headerShown: false }} />
+        <Stack.Screen name="Main" component={TabNavigator} options={{ headerShown: false }} />
+        <Stack.Screen name="Notifications" component={NotificationsScreen} options={{ headerShown: false }} />
+      </Stack.Navigator>
+    </NavigationContainer>
   );
 }
